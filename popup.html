@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>FE Debug Logger</h1>
+    <div id="status" class="status idle">Idle</div>
+    <div class="controls">
+      <button id="toggleBtn" class="btn btn-start">Start</button>
+      <button id="exportBtn" class="btn btn-export" disabled>Export</button>
+      <button id="clearBtn" class="btn btn-clear" disabled>Clear</button>
+    </div>
+    <div class="options">
+      <label><input type="checkbox" id="optConsole" checked> Console Errors</label>
+      <label><input type="checkbox" id="optUserActions" checked> User Actions</label>
+      <label><input type="checkbox" id="optNetwork" checked> Network</label>
+      <label><input type="checkbox" id="optComponentState" checked> Component State</label>
+    </div>
+    <div id="entryCount" class="entry-count"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
