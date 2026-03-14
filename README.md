@@ -33,25 +33,59 @@ Coming soon.
 
 ## Usage
 
+### Basic Workflow
+
 1. Navigate to the page you want to debug
 2. Click the extension icon to open the popup
-3. Toggle capture categories as needed (Console, User Actions, Network, Component State)
+3. Toggle capture categories as needed:
+   - **Console Errors** — `console.error`, `console.warn`, unhandled exceptions
+   - **User Actions** — clicks, form inputs, navigation, keyboard events
+   - **Network** — HTTP errors (4xx/5xx), slow requests (> 3s)
+   - **Component State** — React/Vue component props & state trees
 4. Click **Start** to begin recording
 5. Reproduce the issue on the page
-6. Click **Stop**, then **Export** to download a `.md` file
-7. Feed the Markdown to Claude Code or your preferred AI tool
+6. Click **Stop** when done
+7. Choose an output method:
+   - **Copy** — copies Markdown to clipboard (paste directly into Claude Code)
+   - **Export** — downloads as `.md` file or `.zip` (if screenshots included)
+8. **Clear** — resets all captured data for a new session
 
 ### Annotation Mode
 
-- Click **Annotate** or press `Cmd+Shift+A` (Mac) / `Ctrl+Shift+A` (Windows/Linux)
-- Click any element on the page to add a note
-- Annotations are included in the exported Markdown
+Annotate specific UI elements with notes to highlight problem areas:
 
-### Screenshots
+1. Click **Annotate** in the popup (or press `Cmd+Shift+A` / `Ctrl+Shift+A`)
+2. Hover over elements — they'll be highlighted with a blue outline
+3. Click an element to select it
+4. Enter a note describing the issue (e.g., "This button doesn't respond on mobile")
+5. The annotation captures: element tag, CSS selector, dimensions, and your note
+6. Press `Esc` or click **Annotate** again to exit annotation mode
+7. Annotations appear in the exported Markdown with element context
 
-- **Full Page** — captures the entire scrollable page
-- **Select Region** — drag to capture a specific area
-- Screenshots are embedded as base64 in the export
+### Screenshot Capture
+
+Capture visual evidence alongside your debug logs:
+
+1. Click the **Screenshot** dropdown in the popup
+2. Choose a capture mode:
+   - **Full Page** — scrolls and stitches the entire page into one image
+   - **Select Region** — drag a rectangle to capture a specific area
+3. Screenshots are embedded as base64 images in the export
+4. Maximum 5 screenshots per session to keep export size manageable
+
+### Example: Debugging with Claude Code
+
+```bash
+# 1. Record a bug reproduction, then export/copy the Markdown
+
+# 2. Paste or reference the file in Claude Code
+claude "Here's a debug log from my app. The submit button throws an error
+when the form has empty required fields. Please analyze and fix:
+
+$(cat fe-debug-log-20260314-153022.md)"
+```
+
+The exported Markdown gives Claude Code full context: what the user did, what errors occurred, what network requests failed, and what the component state looked like — no manual copy-pasting from DevTools needed.
 
 ## Export Format
 
