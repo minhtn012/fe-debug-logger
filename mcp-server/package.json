@@ -1,0 +1,18 @@
+{
+  "name": "fe-debug-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for FE Debug Logger Chrome extension",
+  "type": "module",
+  "bin": {
+    "fe-debug-mcp": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.23.0",
+    "ws": "^8.18.0",
+    "adm-zip": "^0.5.16"
+  }
+}

@@ -1,15 +1,21 @@
 {
   "manifest_version": 3,
   "name": "FE Debug Logger",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Capture frontend debug logs as structured Markdown for Claude Code",
-  "permissions": ["activeTab", "storage", "downloads", "offscreen"],
+  "permissions": ["activeTab", "storage", "downloads", "offscreen", "tabs", "alarms"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
+    }
+  },
+  "commands": {
+    "toggle-annotate": {
+      "suggested_key": { "default": "Ctrl+Shift+A", "mac": "Command+Shift+A" },
+      "description": "Toggle annotation inspect mode"
     }
   },
   "background": {
@@ -28,6 +34,9 @@
         "capture/user-action-capture.js",
         "capture/network-capture.js",
         "capture/component-state-capture.js",
+        "capture/dom-snapshot-capture.js",
+        "capture/annotation-capture.js",
+        "capture/screenshot-capture.js",
         "content-script-main.js"
       ],
       "world": "MAIN",

@@ -41,6 +41,17 @@ function createUserActionCapture(postLog) {
     return parts.join(' > ');
   }
 
+  function isAnnotationOverlay(el) {
+    try {
+      let current = el;
+      while (current) {
+        if (current.id === '__fe_debug_annotation_root__' || current.id === '__fe_debug_region_overlay__') return true;
+        current = current.parentElement || (current.getRootNode && current.getRootNode().host);
+      }
+    } catch (_) {}
+    return false;
+  }
+
   function log(data) {
     if (entryCount >= MAX_ENTRIES) return;
     entryCount++;
@@ -80,6 +91,7 @@ function createUserActionCapture(postLog) {
     entryCount = 0;
 
     addListener('click', (e) => {
+      if (isAnnotationOverlay(e.target)) return;
       log({
         event: 'click',
         selector: getSelector(e.target),
@@ -89,10 +101,12 @@ function createUserActionCapture(postLog) {
     });
 
     addListener('input', (e) => {
+      if (isAnnotationOverlay(e.target)) return;
       debounceInput(e.target);
     });
 
     addListener('change', (e) => {
+      if (isAnnotationOverlay(e.target)) return;
       log({
         event: 'change',
         selector: getSelector(e.target),

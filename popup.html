@@ -10,8 +10,19 @@
     <div id="status" class="status idle">Idle</div>
     <div class="controls">
       <button id="toggleBtn" class="btn btn-start">Start</button>
+      <button id="copyBtn" class="btn btn-copy" disabled>Copy</button>
       <button id="exportBtn" class="btn btn-export" disabled>Export</button>
       <button id="clearBtn" class="btn btn-clear" disabled>Clear</button>
+    </div>
+    <div class="tools">
+      <button id="annotateBtn" class="btn btn-annotate">Annotate</button>
+      <div class="screenshot-group">
+        <button id="screenshotBtn" class="btn btn-screenshot">Screenshot &#x25BE;</button>
+        <div id="screenshotMenu" class="dropdown-menu hidden">
+          <button id="ssFullPage" class="dropdown-item">Full Page</button>
+          <button id="ssRegion" class="dropdown-item">Select Region</button>
+        </div>
+      </div>
     </div>
     <div class="options">
       <label><input type="checkbox" id="optConsole" checked> Console Errors</label>
@@ -20,6 +31,7 @@
       <label><input type="checkbox" id="optComponentState" checked> Component State</label>
     </div>
     <div id="entryCount" class="entry-count"></div>
+    <div id="annotationCount" class="entry-count"></div>
   </div>
   <script src="popup.js"></script>
 </body>

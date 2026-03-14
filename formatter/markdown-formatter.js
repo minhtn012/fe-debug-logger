@@ -1,15 +1,20 @@
 // Markdown formatter — converts captured log entries into structured Markdown
 // eslint-disable-next-line no-unused-vars
 function formatMarkdown(logData) {
-  const { meta, entries } = logData;
+  const { meta, entries, screenshotMap } = logData;
   const sections = [];
 
   sections.push(formatHeader(meta));
+  sections.push(formatMetadata(meta, entries));
 
+  const annotations = entries.filter((e) => e.category === 'annotation');
   const actions = entries.filter((e) => e.category === 'action');
   const consoleEntries = entries.filter((e) => e.category === 'console');
   const networkEntries = entries.filter((e) => e.category === 'network');
   const stateEntries = entries.filter((e) => e.category === 'state');
+
+  const annotationSection = formatAnnotations(annotations, entries, screenshotMap || {});
+  if (annotationSection) sections.push(annotationSection);
 
   const actionSection = formatUserActions(actions);
   if (actionSection) sections.push(actionSection);
@@ -34,7 +39,6 @@ function formatHeader(meta) {
   const ua = meta?.userAgent || 'Unknown';
   const viewport = meta?.viewport || 'Unknown';
 
-  // Extract browser name/version from UA
   const browserMatch = ua.match(/(Chrome|Firefox|Safari|Edge)\/(\d+[\d.]*)/);
   const browser = browserMatch ? `${browserMatch[1]} ${browserMatch[2]}` : ua.substring(0, 60);
 
@@ -48,6 +52,129 @@ function formatHeader(meta) {
 | Duration | ${duration} |
 | Browser | ${browser} |
 | Viewport | ${viewport} |`;
+}
+
+function formatMetadata(meta, entries) {
+  const annotations = entries.filter((e) => e.category === 'annotation');
+  const consoleErrors = entries.filter((e) => e.category === 'console');
+  const networkIssues = entries.filter((e) => e.category === 'network');
+  const screenshotCount = annotations.filter((e) => e.wantScreenshot).length;
+
+  return `## Report Metadata
+| Field | Value |
+|-------|-------|
+| Tool | FE Debug Logger v0.2.0 |
+| Report Type | Frontend Bug Report |
+| Annotations | ${annotations.length} |
+| Screenshots | ${screenshotCount} |
+| Console Errors | ${consoleErrors.length} |
+| Network Issues | ${networkIssues.length} |
+| Key Sections | Annotations (user-reported bugs with DOM context + identifiers for source grep) |`;
+}
+
+function formatAnnotations(annotations, allEntries, screenshotMap) {
+  if (!annotations.length) return null;
+
+  let md = `## Annotations (${annotations.length})\n`;
+
+  annotations.forEach((a, i) => {
+    const severityBadge = `**[${(a.severity || 'MAJOR').toUpperCase()}]**`;
+    const tags = (a.tags || []).map((t) => `\`${t}\``).join(' ');
+    md += `\n### #${i + 1} ${severityBadge} ${tags}\n`;
+    md += `**Element:** \`${escapeCell(a.selector || 'unknown')}\`\n`;
+    md += `**Note:** ${escapeCell(a.note || '')}\n`;
+    md += `**Time:** ${formatTime(a.timestamp)}\n`;
+
+    // Temporal linking: find nearby events ±5 seconds
+    const nearbyContext = findNearbyEvents(allEntries, a.timestamp, 5000);
+    if (nearbyContext) {
+      md += `\n**Context (±5s):** ${nearbyContext}\n`;
+    }
+
+    // Screenshot reference
+    const screenshotFile = screenshotMap[a.annotationId];
+    if (screenshotFile) {
+      md += `\n![screenshot](screenshots/${screenshotFile})\n`;
+    }
+
+    // DOM Snapshot
+    if (a.domSnapshot) {
+      md += formatDomSnapshot(a.domSnapshot);
+    }
+  });
+
+  return md;
+}
+
+function formatDomSnapshot(snapshot) {
+  let md = '\n**DOM Snapshot:**\n';
+
+  // Identifiers table (data-*, id, aria-label)
+  if (snapshot.identifiers) {
+    md += '\n**Identifiers:**\n| Attribute | Value |\n|-----------|-------|\n';
+    for (const [attr, val] of Object.entries(snapshot.identifiers)) {
+      md += `| ${attr} | ${escapeCell(String(val))} |\n`;
+    }
+  }
+
+  if (snapshot.outerHTML) {
+    md += '\n```html\n' + snapshot.outerHTML + '\n```\n';
+  }
+
+  if (snapshot.computedStyles) {
+    md += '\n**Computed Styles:**\n| Property | Value |\n|----------|-------|\n';
+    for (const [prop, val] of Object.entries(snapshot.computedStyles)) {
+      md += `| ${prop} | ${escapeCell(String(val))} |\n`;
+    }
+  }
+
+  if (snapshot.boundingRect) {
+    const r = snapshot.boundingRect;
+    md += `| bounding | ${r.width}x${r.height} @ (${r.x}, ${r.y}) |\n`;
+  }
+
+  if (snapshot.visibility) {
+    md += `| visible | ${snapshot.visibility.isVisible ? 'yes' : 'NO'} |\n`;
+  }
+
+  if (snapshot.parentChain && snapshot.parentChain.length > 0) {
+    md += '\n**Parent Chain:**\n';
+    snapshot.parentChain.forEach((p, i) => {
+      let desc = `${i + 1}. \`${p.tag}\``;
+      if (p.id) desc += `#${p.id}`;
+      if (p.classes) desc += `.${p.classes.replace(/\s+/g, '.')}`;
+      if (p.identifiers) {
+        const ids = Object.entries(p.identifiers).map(([k, v]) => `${k}="${v}"`).join(' ');
+        if (ids) desc += ` [${ids}]`;
+      }
+      md += desc + '\n';
+    });
+  }
+
+  return md;
+}
+
+function findNearbyEvents(entries, timestamp, windowMs) {
+  if (!timestamp) return null;
+  const t = new Date(timestamp).getTime();
+  const nearby = entries.filter((e) => {
+    if (e.category === 'annotation') return false;
+    const et = new Date(e.timestamp).getTime();
+    return Math.abs(et - t) <= windowMs;
+  });
+
+  if (!nearby.length) return null;
+
+  const parts = [];
+  const errors = nearby.filter((e) => e.category === 'console');
+  const actions = nearby.filter((e) => e.category === 'action');
+  const network = nearby.filter((e) => e.category === 'network');
+
+  if (errors.length) parts.push(`${errors.length} console error(s)`);
+  if (actions.length) parts.push(`${actions.length} user action(s)`);
+  if (network.length) parts.push(`${network.length} network request(s)`);
+
+  return parts.join(', ');
 }
 
 function formatUserActions(actions) {
@@ -142,7 +269,6 @@ function formatComponentState(entries) {
     return md;
   }
 
-  // Show the latest snapshot
   const latest = snapshots[snapshots.length - 1];
   md += `\nSnapshot at ${formatTime(latest.timestamp)}:\n`;
   md += '```\n' + renderTree(latest.tree, '', true) + '```\n';

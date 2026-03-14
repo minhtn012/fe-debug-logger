@@ -14,6 +14,11 @@
     }, '*');
   }
 
+  // Post generic message to ISOLATED world bridge
+  function postMessage(msg) {
+    window.postMessage(msg, '*');
+  }
+
   // Wrap postLog for console errors to trigger component snapshot
   function postLogWithSnapshot(category, data) {
     postLog(category, data);
@@ -28,6 +33,8 @@
     userAction: createUserActionCapture(postLog),
     network: createNetworkCapture(postLog),
     componentState: createComponentStateCapture(postLog),
+    annotation: createAnnotationCapture(postLog),
+    screenshot: createScreenshotCapture(postMessage),
   };
 
   function startCapture(cfg) {
@@ -37,6 +44,7 @@
     // Send page metadata
     window.postMessage({
       __source: SIGNATURE,
+      version: 1,
       type: 'PAGE_META',
       url: window.location.href,
       userAgent: navigator.userAgent,
@@ -55,6 +63,8 @@
     try { captures.userAction.stop(); } catch (_) {}
     try { captures.network.stop(); } catch (_) {}
     try { captures.componentState.stop(); } catch (_) {}
+    try { captures.annotation.stop(); } catch (_) {}
+    try { captures.screenshot.stop(); } catch (_) {}
   }
 
   // Listen for commands from ISOLATED world bridge
@@ -67,6 +77,12 @@
       startCapture(msg.config || {});
     } else if (msg.type === 'STOP_CAPTURE') {
       stopCapture();
+    } else if (msg.type === 'START_ANNOTATE') {
+      try { captures.annotation.start(); } catch (e) { console.error('__fe_debug_logger__', 'Annotation start failed:', e); }
+    } else if (msg.type === 'STOP_ANNOTATE') {
+      try { captures.annotation.stop(); } catch (_) {}
+    } else if (msg.type === 'START_REGION_SELECT') {
+      try { captures.screenshot.startRegionSelect(); } catch (e) { console.error('__fe_debug_logger__', 'Region select failed:', e); }
     }
   });
 })();

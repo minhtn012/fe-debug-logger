@@ -1,9 +1,16 @@
 (function () {
   const toggleBtn = document.getElementById('toggleBtn');
+  const copyBtn = document.getElementById('copyBtn');
   const exportBtn = document.getElementById('exportBtn');
   const clearBtn = document.getElementById('clearBtn');
+  const annotateBtn = document.getElementById('annotateBtn');
+  const screenshotBtn = document.getElementById('screenshotBtn');
+  const screenshotMenu = document.getElementById('screenshotMenu');
+  const ssFullPage = document.getElementById('ssFullPage');
+  const ssRegion = document.getElementById('ssRegion');
   const statusEl = document.getElementById('status');
   const entryCountEl = document.getElementById('entryCount');
+  const annotationCountEl = document.getElementById('annotationCount');
   const optConsole = document.getElementById('optConsole');
   const optUserActions = document.getElementById('optUserActions');
   const optNetwork = document.getElementById('optNetwork');
@@ -11,7 +18,7 @@
 
   let isRecording = false;
 
-  function updateUI(recording, count) {
+  function updateUI(recording, count, annotCount) {
     isRecording = recording;
     if (recording) {
       statusEl.textContent = 'Recording...';
@@ -26,11 +33,16 @@
       statusEl.className = 'status idle';
       toggleBtn.textContent = 'Start';
       toggleBtn.classList.remove('active');
-      exportBtn.disabled = count === 0;
-      clearBtn.disabled = count === 0;
+      const hasData = count > 0 || (annotCount || 0) > 0;
+      copyBtn.disabled = !hasData;
+      exportBtn.disabled = !hasData;
+      clearBtn.disabled = !hasData;
       setCheckboxesDisabled(false);
     }
     entryCountEl.textContent = count > 0 ? `${count} event${count !== 1 ? 's' : ''} captured` : '';
+    annotationCountEl.textContent = (annotCount || 0) > 0
+      ? `${annotCount} annotation${annotCount !== 1 ? 's' : ''}`
+      : '';
   }
 
   function setCheckboxesDisabled(disabled) {
@@ -51,7 +63,7 @@
 
   // Query current status on popup open
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (resp) => {
-    if (resp) updateUI(resp.recording, resp.entryCount);
+    if (resp) updateUI(resp.recording, resp.entryCount, resp.annotationCount);
   });
 
   toggleBtn.addEventListener('click', () => {
@@ -66,13 +78,45 @@
     }
   });
 
+  copyBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'COPY_LOG' });
+    copyBtn.textContent = 'Copied!';
+    copyBtn.classList.add('copied');
+    setTimeout(() => {
+      copyBtn.textContent = 'Copy';
+      copyBtn.classList.remove('copied');
+    }, 1500);
+  });
+
   exportBtn.addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'EXPORT_LOG' });
   });
 
   clearBtn.addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'CLEAR_LOG' }, () => {
-      updateUI(false, 0);
+      updateUI(false, 0, 0);
     });
+  });
+
+  // Annotate button — activates inspect mode
+  annotateBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'START_ANNOTATE' }, () => {
+      window.close();
+    });
+  });
+
+  // Screenshot dropdown toggle
+  screenshotBtn.addEventListener('click', () => {
+    screenshotMenu.classList.toggle('hidden');
+  });
+
+  ssFullPage.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
+    window.close();
+  });
+
+  ssRegion.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'START_REGION_SELECT' });
+    window.close();
   });
 })();
