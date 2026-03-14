@@ -2,6 +2,10 @@
 
 Chrome extension that captures frontend debug logs as structured Markdown — optimized for AI-assisted debugging with Claude Code.
 
+| Recording & Annotation | Popup UI | Exported Output |
+|---|---|---|
+| ![Recording](imgs-store/resized/04-annotation.png) | ![Popup](imgs-store/resized/01-popup.png) | ![Export](imgs-store/resized/05-mcp-integration.png) |
+
 ## Features
 
 - **Console Capture** — hooks `console.error`, `console.warn`, `window.onerror`, unhandled promise rejections
