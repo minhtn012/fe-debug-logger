@@ -111,11 +111,66 @@ The exported Markdown includes:
 - **Offscreen Document** — Blob creation for MV3 file downloads
 - **Chrome Storage API** — session state survives service worker restarts
 
-## Advanced: MCP Integration
+## MCP Server Integration
 
-The extension optionally connects to a local WebSocket server for programmatic control via MCP (Model Context Protocol). If no server is running, the extension works normally — the connection fails silently.
+The extension ships with an MCP (Model Context Protocol) server that lets Claude Code control recording programmatically. **This is optional** — the extension works fully without it.
 
-Supported commands: `START_RECORDING`, `STOP_RECORDING`, `GET_ENTRIES`, `TAKE_SCREENSHOT`.
+### How It Works
+
+```
+Claude Code ←→ MCP Server (stdio) ←→ WebSocket (localhost:3456) ←→ Chrome Extension
+```
+
+### Install & Setup
+
+1. Install the MCP server dependencies:
+   ```bash
+   cd mcp-server
+   npm install
+   ```
+
+2. Add to your Claude Code MCP config (`~/.claude/settings.json`):
+   ```json
+   {
+     "mcpServers": {
+       "fe-debug": {
+         "command": "node",
+         "args": ["/path/to/fe-debug-logger/mcp-server/index.js"]
+       }
+     }
+   }
+   ```
+
+3. Open any page in Chrome with the extension installed — it auto-connects to the MCP server via WebSocket on `localhost:3456`.
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `get-status` | Check extension connection and recording status |
+| `start-recording` | Start capturing debug data (configurable categories) |
+| `stop-recording` | Stop recording and return captured entries |
+| `get-debug-log` | Read latest debug log (live from extension or saved .zip files) |
+| `list-debug-logs` | List saved debug sessions from `~/Downloads/fe-debug/sessions/` |
+| `cleanup-debug-logs` | Delete sessions older than N days (default: 7) |
+
+### Usage with Claude Code
+
+Once configured, Claude Code can use the tools directly:
+
+```
+You: "Start recording debug data on this page"
+Claude: Uses `start-recording` tool → extension begins capturing
+
+You: "I just reproduced the bug, show me what happened"
+Claude: Uses `stop-recording` tool → receives all captured entries with screenshots
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FE_DEBUG_PATH` | `~/Downloads/fe-debug/sessions/` | Directory for saved debug sessions |
 
 ## Privacy
 
