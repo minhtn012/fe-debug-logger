@@ -1,4 +1,4 @@
-// Markdown formatter — converts captured log entries into structured Markdown
+// Markdown formatter - converts captured log entries into structured Markdown
 // eslint-disable-next-line no-unused-vars
 function formatMarkdown(logData) {
   const { meta, entries, screenshotMap } = logData;
@@ -216,7 +216,7 @@ function formatConsoleErrors(entries) {
       : e.type === 'unhandledrejection' ? 'Unhandled Rejection'
       : 'Error';
     const repeatBadge = (e.repeatCount && e.repeatCount > 1) ? ` (×${e.repeatCount})` : '';
-    md += `\n### ${typeLabel} ${i + 1}${repeatBadge} — at ${formatTime(e.timestamp)}\n`;
+    md += `\n### ${typeLabel} ${i + 1}${repeatBadge} - at ${formatTime(e.timestamp)}\n`;
     if (e.lastTimestamp && e.repeatCount > 1) {
       md += `**Repeated until:** ${formatTime(e.lastTimestamp)}\n`;
     }
@@ -245,15 +245,34 @@ function formatNetworkIssues(entries) {
   for (const req of entries) {
     const statusLabel = req.status === 0 ? 'Network Error'
       : `${req.status} ${req.statusText || ''}`;
-    md += `\n### ${req.method} ${truncateUrl(req.url)} — ${statusLabel} (${req.duration}ms)\n`;
+    md += `\n### ${req.method} ${truncateUrl(req.url)} - ${statusLabel} (${req.duration}ms)\n`;
+    md += `**Full URL:** \`${req.url}\`\n`;
 
     if (req.error) md += `**Error:** ${req.error}\n`;
+
+    if (req.requestHeaders && Object.keys(req.requestHeaders).length) {
+      md += '**Request Headers:**\n| Header | Value |\n|--------|-------|\n';
+      for (const [k, v] of Object.entries(req.requestHeaders)) {
+        md += `| ${escapeCell(k)} | ${escapeCell(String(v))} |\n`;
+      }
+    }
+
+    if (req.responseHeaders && Object.keys(req.responseHeaders).length) {
+      md += '**Response Headers:**\n| Header | Value |\n|--------|-------|\n';
+      for (const [k, v] of Object.entries(req.responseHeaders)) {
+        md += `| ${escapeCell(k)} | ${escapeCell(String(v))} |\n`;
+      }
+    }
 
     if (req.requestBody) {
       md += '**Request Body:**\n```json\n' + req.requestBody + '\n```\n';
     }
     if (req.responseBody) {
       md += '**Response Body:**\n```json\n' + req.responseBody + '\n```\n';
+    }
+
+    if (req.curl) {
+      md += '**cURL:**\n```bash\n' + req.curl + '\n```\n';
     }
   }
 
