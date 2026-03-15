@@ -48,7 +48,7 @@ function formatHeader(meta) {
 | Field | Value |
 |-------|-------|
 | URL | ${url} |
-| Time | ${start} → ${end} |
+| Time | ${start} -> ${end} |
 | Duration | ${duration} |
 | Browser | ${browser} |
 | Viewport | ${viewport} |`;
@@ -215,7 +215,11 @@ function formatConsoleErrors(entries) {
     const typeLabel = e.type === 'onerror' ? 'Runtime Error'
       : e.type === 'unhandledrejection' ? 'Unhandled Rejection'
       : 'Error';
-    md += `\n### ${typeLabel} ${i + 1} — at ${formatTime(e.timestamp)}\n`;
+    const repeatBadge = (e.repeatCount && e.repeatCount > 1) ? ` (×${e.repeatCount})` : '';
+    md += `\n### ${typeLabel} ${i + 1}${repeatBadge} — at ${formatTime(e.timestamp)}\n`;
+    if (e.lastTimestamp && e.repeatCount > 1) {
+      md += `**Repeated until:** ${formatTime(e.lastTimestamp)}\n`;
+    }
     if (e.source) md += `**Source:** ${e.source}:${e.lineno || 0}:${e.colno || 0}\n`;
     md += '```\n' + e.message + '\n';
     if (e.stack) md += e.stack + '\n';
@@ -225,7 +229,8 @@ function formatConsoleErrors(entries) {
   if (warnings.length) {
     md += '\n### Warnings\n';
     for (const w of warnings) {
-      md += `- **${formatTime(w.timestamp)}**: ${w.message}\n`;
+      const wRepeat = (w.repeatCount && w.repeatCount > 1) ? ` (×${w.repeatCount})` : '';
+      md += `- **${formatTime(w.timestamp)}**${wRepeat}: ${w.message}\n`;
     }
   }
 

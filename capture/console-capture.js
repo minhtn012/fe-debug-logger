@@ -5,6 +5,9 @@ function createConsoleCapture(postLog) {
   let errorListener, rejectionListener;
   const SKIP_MARKER = '__fe_debug_logger__';
 
+  // Dedup: track last message per type to collapse repeated entries
+  let lastEntry = { type: null, message: null, count: 0, key: null };
+
   function formatArg(arg) {
     if (arg === null) return 'null';
     if (arg === undefined) return 'undefined';
@@ -28,6 +31,20 @@ function createConsoleCapture(postLog) {
     }
   }
 
+  // Post log with dedup — collapses consecutive identical messages
+  function postDeduped(entry) {
+    if (entry.type === lastEntry.type && entry.message === lastEntry.message) {
+      lastEntry.count++;
+      // Update existing entry with repeat count + latest timestamp
+      postLog('console', { ...entry, repeatCount: lastEntry.count, dedupKey: lastEntry.key });
+      return;
+    }
+    // New unique message — reset tracker
+    const key = `dedup_${Date.now()}`;
+    lastEntry = { type: entry.type, message: entry.message, count: 1, key };
+    postLog('console', { ...entry, repeatCount: 1, dedupKey: key });
+  }
+
   function start() {
     origError = console.error;
     origWarn = console.warn;
@@ -36,7 +53,7 @@ function createConsoleCapture(postLog) {
       if (args[0] === SKIP_MARKER) {
         return origError.apply(console, args.slice(1));
       }
-      postLog('console', {
+      postDeduped({
         timestamp: new Date().toISOString(),
         type: 'error',
         message: args.map(formatArg).join(' '),
@@ -49,7 +66,7 @@ function createConsoleCapture(postLog) {
       if (args[0] === SKIP_MARKER) {
         return origWarn.apply(console, args.slice(1));
       }
-      postLog('console', {
+      postDeduped({
         timestamp: new Date().toISOString(),
         type: 'warn',
         message: args.map(formatArg).join(' '),

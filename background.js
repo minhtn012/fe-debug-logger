@@ -134,10 +134,38 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'LOG_ENTRY') {
-    const key = `log_${Date.now()}_${entryCounter}`;
     const { __source, version, type, data, ...rest } = msg;
-    const entry = { ...(data || rest), _key: key, _seq: entryCounter };
+    const entryData = data || rest;
+
+    // Dedup: if entry has dedupKey and repeatCount > 1, update existing entry
+    if (entryData.dedupKey && entryData.repeatCount > 1) {
+      const dedupStorageKey = `dedup_${entryData.dedupKey}`;
+      chrome.storage.session.get([dedupStorageKey], (stored) => {
+        const existingKey = stored[dedupStorageKey];
+        if (existingKey) {
+          // Update existing entry in-place with new count + timestamp
+          chrome.storage.local.get([existingKey], (items) => {
+            if (items[existingKey]) {
+              const updated = { ...items[existingKey], repeatCount: entryData.repeatCount, lastTimestamp: entryData.timestamp };
+              chrome.storage.local.set({ [existingKey]: updated });
+            }
+          });
+          return;
+        }
+      });
+      return false;
+    }
+
+    // New unique entry
+    const key = `log_${Date.now()}_${entryCounter}`;
+    const entry = { ...entryData, _key: key, _seq: entryCounter };
     chrome.storage.local.set({ [key]: entry });
+
+    // Track dedupKey → storage key mapping for future dedup lookups
+    if (entryData.dedupKey) {
+      chrome.storage.session.set({ [`dedup_${entryData.dedupKey}`]: key });
+    }
+
     entryCounter++;
     chrome.storage.session.set({ entryCounter });
     return false;
