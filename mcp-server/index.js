@@ -4,10 +4,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { WebSocketServer } from 'ws';
 import AdmZip from 'adm-zip';
-import { readdir, stat, unlink, mkdir } from 'fs/promises';
+import { readdir, stat, unlink, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { z } from 'zod';
+import { formatMarkdown } from './markdown-formatter.js';
 
 // --- Config ---
 const WS_PORT = 3456;
@@ -15,16 +16,45 @@ const PING_INTERVAL = 20000;
 const DEFAULT_CLEANUP_DAYS = 7;
 const SESSIONS_DIR = process.env.FE_DEBUG_PATH || join(homedir(), 'Downloads', 'fe-debug', 'sessions');
 
+// Live stream — defaults to CWD/fe-debug/, overridable via start-recording param
+let liveLogDir = process.cwd();
+let liveEntries = [];
+let liveSessionMeta = {};
+let liveScreenshotMap = {};
+
 // --- WebSocket state ---
 let extensionWs = null;
 let pendingRequests = new Map();
 let requestIdCounter = 0;
 
 // --- WebSocket Server ---
+// Kill any existing process on WS_PORT before binding (prevents port conflicts across sessions)
+import { execSync } from 'child_process';
+try {
+  const pid = execSync(`lsof -ti :${WS_PORT}`, { encoding: 'utf8' }).trim();
+  if (pid) {
+    execSync(`kill ${pid}`);
+    console.error(`[fe-debug-mcp] Killed old process on port ${WS_PORT} (PID ${pid})`);
+    // Brief delay for port release
+    execSync('sleep 0.5');
+  }
+} catch (_) {
+  // No process on port — normal case
+}
+
 const wss = new WebSocketServer({ port: WS_PORT });
 let pingTimer = null;
 
 wss.on('connection', (ws) => {
+  // Close old connection and reject its pending requests
+  if (extensionWs && extensionWs.readyState <= 1) {
+    extensionWs.close(1000, 'Replaced by new connection');
+  }
+  for (const [reqId, pending] of pendingRequests.entries()) {
+    pending.resolve({ type: 'ERROR', message: 'Connection replaced' });
+    pendingRequests.delete(reqId);
+  }
+
   extensionWs = ws;
   console.error('[fe-debug-mcp] Extension connected via WebSocket');
 
@@ -43,21 +73,28 @@ wss.on('connection', (ws) => {
       // Handle PONG (keepalive)
       if (msg.type === 'PONG') return;
 
-      // Route response to pending request
+      // Handle streamed entries — regenerate fe-debug/debug-log.md
+      if (msg.type === 'STREAM_ENTRIES' && msg.entries) {
+        handleStreamEntries(msg.entries, msg.domain).catch((err) =>
+          console.error('[fe-debug-mcp] Stream write error:', err)
+        );
+        return;
+      }
+
+      // Handle streamed screenshot — save to fe-debug/screenshots/
+      if (msg.type === 'STREAM_SCREENSHOT' && msg.screenshot) {
+        handleStreamScreenshot(msg.screenshot).catch((err) =>
+          console.error('[fe-debug-mcp] Screenshot save error:', err)
+        );
+        return;
+      }
+
+      // Route response to pending request by _requestId only
       if (msg._requestId && pendingRequests.has(msg._requestId)) {
         const { resolve } = pendingRequests.get(msg._requestId);
         pendingRequests.delete(msg._requestId);
         resolve(msg);
         return;
-      }
-
-      // Handle unsolicited responses (match by type)
-      for (const [reqId, pending] of pendingRequests.entries()) {
-        if (pending.expectedType === msg.type) {
-          pendingRequests.delete(reqId);
-          pending.resolve(msg);
-          return;
-        }
       }
     } catch (err) {
       console.error('[fe-debug-mcp] WS message parse error:', err);
@@ -85,8 +122,8 @@ wss.on('error', (err) => {
 
 console.error(`[fe-debug-mcp] WebSocket server listening on port ${WS_PORT}`);
 
-// Send command to extension and wait for response
-function sendToExtension(command, expectedType, timeoutMs = 10000) {
+// Send command to extension and wait for response matched by _requestId
+function sendToExtension(command, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
     if (!extensionWs || extensionWs.readyState !== extensionWs.OPEN) {
       reject(new Error('Extension not connected'));
@@ -104,7 +141,6 @@ function sendToExtension(command, expectedType, timeoutMs = 10000) {
         clearTimeout(timer);
         resolve(msg);
       },
-      expectedType,
     });
 
     extensionWs.send(JSON.stringify({ ...command, _requestId: requestId }));
@@ -161,6 +197,42 @@ function readZipContents(zipPath) {
   return result;
 }
 
+// Accumulate streamed entries and regenerate fe-debug/debug-log.md
+async function handleStreamEntries(entries, domain) {
+  // Update session meta from domain
+  if (domain && domain !== 'unknown') {
+    liveSessionMeta.url = liveSessionMeta.url || domain;
+  }
+
+  liveEntries.push(...entries);
+
+  // Write markdown to fe-debug/debug-log.md
+  const feDebugDir = join(liveLogDir, 'fe-debug');
+  await mkdir(feDebugDir, { recursive: true });
+
+  const markdown = formatMarkdown({
+    meta: liveSessionMeta,
+    entries: liveEntries,
+    screenshotMap: liveScreenshotMap,
+  });
+  await writeFile(join(feDebugDir, 'debug-log.md'), markdown);
+}
+
+// Save streamed screenshot to fe-debug/screenshots/
+async function handleStreamScreenshot(screenshot) {
+  const feDebugDir = join(liveLogDir, 'fe-debug', 'screenshots');
+  await mkdir(feDebugDir, { recursive: true });
+
+  const { filename, base64, annotationId } = screenshot;
+  const buffer = Buffer.from(base64, 'base64');
+  await writeFile(join(feDebugDir, filename), buffer);
+
+  // Track in screenshotMap for markdown references
+  if (annotationId) {
+    liveScreenshotMap[annotationId] = filename;
+  }
+}
+
 // --- MCP Server ---
 const server = new McpServer({
   name: 'fe-debug',
@@ -205,7 +277,7 @@ server.tool(
     // Try live data from extension first
     if (extensionWs && extensionWs.readyState === extensionWs.OPEN) {
       try {
-        const data = await sendToExtension({ type: 'GET_LOG' }, 'LOG_DATA', 5000);
+        const data = await sendToExtension({ type: 'GET_LOG' }, 30000);
         if (data.entries && data.entries.length > 0) {
           const parts = [{ type: 'text', text: `## Live debug log (${data.entries.length} entries)\n\nSession: ${data.sessionMeta?.url || 'unknown'}` }];
           // Return raw entries as JSON for Claude to analyze
@@ -253,15 +325,34 @@ server.tool(
     userActions: z.boolean().optional().default(true).describe('Capture user actions'),
     network: z.boolean().optional().default(true).describe('Capture network requests'),
     componentState: z.boolean().optional().default(true).describe('Capture component state'),
+    logDir: z.string().optional().describe('Directory to save live stream logs. Defaults to CWD.'),
   },
   async (config) => {
     try {
-      const resp = await sendToExtension(
-        { type: 'START_RECORDING', config },
-        'RECORDING_STARTED'
-      );
+      // Update live log directory if provided
+      if (config.logDir) liveLogDir = config.logDir;
+
+      // Reset live state for fresh session
+      liveEntries = [];
+      liveSessionMeta = { startTime: new Date().toISOString() };
+      liveScreenshotMap = {};
+
+      // Clean old fe-debug folder
+      const feDebugDir = join(liveLogDir, 'fe-debug');
+      const feFiles = await readdir(feDebugDir).catch(() => []);
+      for (const f of feFiles) {
+        if (f === 'debug-log.md') await unlink(join(feDebugDir, f)).catch(() => {});
+      }
+      const ssDir = join(feDebugDir, 'screenshots');
+      const ssFiles = await readdir(ssDir).catch(() => []);
+      for (const f of ssFiles) {
+        await unlink(join(ssDir, f)).catch(() => {});
+      }
+
+      const { logDir, ...recordConfig } = config;
+      const resp = await sendToExtension({ type: 'START_RECORDING', config: recordConfig });
       return {
-        content: [{ type: 'text', text: `Recording started. Config: ${JSON.stringify(config)}` }],
+        content: [{ type: 'text', text: `Recording started. Live logs → ${liveLogDir}\nConfig: ${JSON.stringify(recordConfig)}` }],
       };
     } catch (err) {
       return {
@@ -279,15 +370,12 @@ server.tool(
   {},
   async () => {
     try {
-      const resp = await sendToExtension(
-        { type: 'STOP_RECORDING' },
-        'RECORDING_STOPPED'
-      );
+      const resp = await sendToExtension({ type: 'STOP_RECORDING' });
 
       // Get the log data after stopping
       let logData;
       try {
-        logData = await sendToExtension({ type: 'GET_LOG' }, 'LOG_DATA', 5000);
+        logData = await sendToExtension({ type: 'GET_LOG' }, 30000);
       } catch (_) {
         return {
           content: [{ type: 'text', text: `Recording stopped (${resp.entryCount || 0} entries). Could not retrieve log data.` }],
@@ -333,7 +421,7 @@ server.tool(
     }
 
     try {
-      const status = await sendToExtension({ type: 'GET_STATUS' }, 'STATUS', 3000);
+      const status = await sendToExtension({ type: 'GET_STATUS' }, 5000);
       return {
         content: [{
           type: 'text',
@@ -368,6 +456,34 @@ server.tool(
     return {
       content: [{ type: 'text', text: `Deleted ${deleted} session(s) older than ${olderThanDays} days.` }],
     };
+  }
+);
+
+// Tool: get-live-log
+server.tool(
+  'get-live-log',
+  'Read live debug log from fe-debug/debug-log.md in the project directory. Faster than get-debug-log — no WS roundtrip needed.',
+  {},
+  async () => {
+    const mdPath = join(liveLogDir, 'fe-debug', 'debug-log.md');
+    try {
+      const markdown = await readFile(mdPath, 'utf8');
+      const content = [{ type: 'text', text: markdown }];
+
+      // Include screenshots as images
+      const ssDir = join(liveLogDir, 'fe-debug', 'screenshots');
+      const ssFiles = await readdir(ssDir).catch(() => []);
+      for (const f of ssFiles) {
+        if (f.endsWith('.png')) {
+          const imgData = await readFile(join(ssDir, f));
+          content.push({ type: 'image', data: imgData.toString('base64'), mimeType: 'image/png' });
+        }
+      }
+
+      return { content };
+    } catch {
+      return { content: [{ type: 'text', text: `No live log at ${mdPath}. Start recording first.` }] };
+    }
   }
 );
 

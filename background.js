@@ -4,12 +4,15 @@ let entryCounter = 0;
 let annotationCounter = 0;
 let screenshotCounter = 0;
 const MAX_SCREENSHOTS = 5;
+const STREAM_ALARM = 'stream-entries';
+let lastStreamedSeq = -1;
 
-// Restore entry count from storage on SW wake
-chrome.storage.session.get(['recording', 'entryCounter', 'annotationCounter', 'screenshotCounter'], (data) => {
+// Restore counters from storage on SW wake
+chrome.storage.session.get(['recording', 'entryCounter', 'annotationCounter', 'screenshotCounter', 'lastStreamedSeq'], (data) => {
   entryCounter = data.entryCounter || 0;
   annotationCounter = data.annotationCounter || 0;
   screenshotCounter = data.screenshotCounter || 0;
+  lastStreamedSeq = data.lastStreamedSeq ?? -1;
 });
 
 // WebSocket client for MCP server communication
@@ -88,18 +91,25 @@ async function gatherLogData() {
     if (ss.annotationId) screenshotMap[ss.annotationId] = filename;
   }
 
-  // Format markdown using btoa approach (no offscreen needed for text)
-  // We need offscreen for formatMarkdown, so return raw data instead
   return {
     sessionMeta,
     entries,
     screenshotMap,
+    screenshotKeys,
+    screenshotFiles,
     screenshots: screenshotFiles.map((sf) => ({
       name: sf.filename,
       base64: sf.dataUrl ? sf.dataUrl.split(',')[1] : '',
     })),
   };
 }
+
+// Stream alarm: batch-send entries to MCP server
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === STREAM_ALARM) {
+    flushStreamEntries();
+  }
+});
 
 // Keyboard shortcut: Ctrl+Shift+A toggle annotate
 chrome.commands.onCommand.addListener((command) => {
@@ -137,7 +147,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const { __source, version, type, data, ...rest } = msg;
     const entryData = data || rest;
 
-    // Dedup: if entry has dedupKey and repeatCount > 1, update existing entry
+    // Dedup: if entry has dedupKey and repeatCount > 1, try updating existing
     if (entryData.dedupKey && entryData.repeatCount > 1) {
       const dedupStorageKey = `dedup_${entryData.dedupKey}`;
       chrome.storage.session.get([dedupStorageKey], (stored) => {
@@ -150,24 +160,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               chrome.storage.local.set({ [existingKey]: updated });
             }
           });
-          return;
+        } else {
+          // First occurrence with repeatCount > 1: store as new entry
+          storeNewEntry(entryData);
         }
       });
       return false;
     }
 
-    // New unique entry
-    const key = `log_${Date.now()}_${entryCounter}`;
-    const entry = { ...entryData, _key: key, _seq: entryCounter };
-    chrome.storage.local.set({ [key]: entry });
-
-    // Track dedupKey → storage key mapping for future dedup lookups
-    if (entryData.dedupKey) {
-      chrome.storage.session.set({ [`dedup_${entryData.dedupKey}`]: key });
-    }
-
-    entryCounter++;
-    chrome.storage.session.set({ entryCounter });
+    storeNewEntry(entryData);
     return false;
   }
 
@@ -205,8 +206,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         entryCounter = 0;
         annotationCounter = 0;
         screenshotCounter = 0;
-        chrome.storage.session.set({ entryCounter: 0, annotationCounter: 0, screenshotCounter: 0 });
-        sendResponse({ ok: true });
+        lastStreamedSeq = -1;
+        // Clear dedup keys from session storage
+        chrome.storage.session.get(null, (sessionData) => {
+          const dedupKeys = Object.keys(sessionData).filter((k) => k.startsWith('dedup_'));
+          const clearObj = { entryCounter: 0, annotationCounter: 0, screenshotCounter: 0, lastStreamedSeq: -1 };
+          if (dedupKeys.length > 0) chrome.storage.session.remove(dedupKeys);
+          chrome.storage.session.set(clearObj);
+          sendResponse({ ok: true });
+        });
       });
     });
     return true;
@@ -253,6 +261,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     screenshotCounter++;
     chrome.storage.session.set({ screenshotCounter });
+    // Stream screenshot to MCP server
+    streamScreenshot(msg.croppedDataUrl, msg.annotationId, msg.mode || 'element');
     return false;
   }
 
@@ -292,6 +302,79 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+// Buffer new entries in-memory for streaming (avoids reading all storage each flush)
+let streamBuffer = [];
+
+// Stream: batch-send buffered entries to MCP server via WS
+function flushStreamEntries() {
+  if (!wsClient.isConnected() || streamBuffer.length === 0) return;
+  // Get domain from session meta for file naming
+  chrome.storage.local.get(['sessionMeta'], (data) => {
+    const batch = streamBuffer.splice(0);
+    wsClient.send({
+      type: 'STREAM_ENTRIES',
+      entries: batch,
+      domain: data.sessionMeta?.url || 'unknown',
+    });
+    lastStreamedSeq = batch[batch.length - 1]._seq;
+    chrome.storage.session.set({ lastStreamedSeq });
+  });
+}
+
+function startStreaming() {
+  lastStreamedSeq = -1;
+  streamBuffer = [];
+  streamScreenshotCounters = { annotation: 0, full: 0, region: 0 };
+  chrome.storage.session.set({ lastStreamedSeq: -1 });
+  // Chrome alarms min ~30s; use periodInMinutes for reliable SW wake
+  chrome.alarms.create(STREAM_ALARM, { periodInMinutes: 0.1 }); // ~6s
+}
+
+function stopStreaming() {
+  chrome.alarms.clear(STREAM_ALARM);
+  // Final flush before stopping
+  flushStreamEntries();
+}
+
+// Stream a screenshot to MCP server for live fe-debug/ folder
+let streamScreenshotCounters = { annotation: 0, full: 0, region: 0 };
+
+function streamScreenshot(dataUrl, annotationId, mode) {
+  if (!wsClient.isConnected() || !dataUrl) return;
+
+  let filename;
+  if (mode === 'full') {
+    streamScreenshotCounters.full++;
+    filename = `full-page-${String(streamScreenshotCounters.full).padStart(3, '0')}.png`;
+  } else if (mode === 'region') {
+    streamScreenshotCounters.region++;
+    filename = `region-${String(streamScreenshotCounters.region).padStart(3, '0')}.png`;
+  } else {
+    streamScreenshotCounters.annotation++;
+    filename = `annotation-${String(streamScreenshotCounters.annotation).padStart(3, '0')}.png`;
+  }
+
+  const base64 = dataUrl.split(',')[1] || '';
+  wsClient.send({
+    type: 'STREAM_SCREENSHOT',
+    screenshot: { filename, base64, annotationId },
+  });
+}
+
+// Store a new unique log entry and track its dedupKey
+function storeNewEntry(entryData) {
+  const key = `log_${Date.now()}_${entryCounter}`;
+  const entry = { ...entryData, _key: key, _seq: entryCounter };
+  chrome.storage.local.set({ [key]: entry });
+  if (entryData.dedupKey) {
+    chrome.storage.session.set({ [`dedup_${entryData.dedupKey}`]: key });
+  }
+  // Buffer for stream flush
+  streamBuffer.push(entry);
+  entryCounter++;
+  chrome.storage.session.set({ entryCounter });
+}
+
 function startRecording(config, callback) {
   chrome.storage.local.get(null, (all) => {
     const logKeys = Object.keys(all).filter((k) => k.startsWith('log_'));
@@ -320,12 +403,14 @@ function startRecording(config, callback) {
 
       chrome.action.setBadgeText({ text: 'REC' });
       chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
+      startStreaming();
       if (callback) callback({ recording: true, entryCount: 0 });
     });
   });
 }
 
 function stopRecording(callback) {
+  stopStreaming();
   chrome.storage.session.set({ recording: false });
   chrome.storage.local.get(['sessionMeta'], (data) => {
     const meta = data.sessionMeta || {};
@@ -354,6 +439,8 @@ async function handleScreenshot(msg, tabId) {
       });
       screenshotCounter++;
       chrome.storage.session.set({ screenshotCounter });
+      // Stream to MCP server
+      streamScreenshot(dataUrl, msg.annotationId || null, 'full');
       return;
     }
 
@@ -403,21 +490,7 @@ async function copyLog() {
 
 async function exportLog() {
   const logData = await gatherLogData();
-
-  // Build screenshotFiles with dataUrl for ZIP (gatherLogData strips to base64)
-  const all = await chrome.storage.local.get(null);
-  const screenshotKeys = Object.keys(all).filter((k) => k.startsWith('screenshot_')).sort();
-  const rawScreenshots = screenshotKeys.map((k) => ({ key: k, ...all[k] }));
-
-  const screenshotFiles = [];
-  let aIdx = 0, fIdx = 0, rIdx = 0;
-  for (const ss of rawScreenshots) {
-    let filename;
-    if (ss.mode === 'full') { fIdx++; filename = `full-page-${String(fIdx).padStart(3, '0')}.png`; }
-    else if (ss.mode === 'region') { rIdx++; filename = `region-${String(rIdx).padStart(3, '0')}.png`; }
-    else { aIdx++; filename = `annotation-${String(aIdx).padStart(3, '0')}.png`; }
-    screenshotFiles.push({ filename, dataUrl: ss.dataUrl });
-  }
+  const { screenshotFiles, screenshotKeys } = logData;
 
   // ZIP filename
   let domain = 'unknown';
@@ -440,6 +513,7 @@ async function exportLog() {
     zipFilename,
   });
 
+  // Clean up screenshot storage after export (reuse keys from gatherLogData)
   if (screenshotKeys.length > 0) {
     chrome.storage.local.remove(screenshotKeys);
   }

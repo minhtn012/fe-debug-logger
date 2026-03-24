@@ -3,12 +3,13 @@
 // eslint-disable-next-line no-unused-vars
 function createWebSocketClient(onCommand) {
   const WS_URL = 'ws://localhost:3456';
-  const MAX_RETRIES = 3;
-  const RETRY_INTERVAL = 5000;
+  const BASE_RETRY_MS = 2000;
+  const MAX_RETRY_MS = 60000;
   const ALARM_NAME = 'ws-reconnect';
 
   let ws = null;
   let retryCount = 0;
+  let manualDisconnect = false;
 
   function connect() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -22,6 +23,7 @@ function createWebSocketClient(onCommand) {
 
     ws.onopen = () => {
       retryCount = 0;
+      manualDisconnect = false;
       // Persist WS state so reconnect works after SW restart
       chrome.storage.session.set({ wsWasConnected: true });
       // Clear alarm — WS ping/pong keeps SW alive
@@ -44,10 +46,11 @@ function createWebSocketClient(onCommand) {
 
     ws.onclose = () => {
       ws = null;
-      if (retryCount < MAX_RETRIES) {
+      if (!manualDisconnect) {
         retryCount++;
-        // Set alarm for reconnect backup
-        chrome.alarms.create(ALARM_NAME, { delayInMinutes: RETRY_INTERVAL / 60000 });
+        // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 60s cap
+        const delay = Math.min(BASE_RETRY_MS * Math.pow(2, retryCount - 1), MAX_RETRY_MS);
+        chrome.alarms.create(ALARM_NAME, { delayInMinutes: delay / 60000 });
       }
     };
 
@@ -64,8 +67,8 @@ function createWebSocketClient(onCommand) {
   }
 
   function disconnect() {
+    manualDisconnect = true;
     chrome.storage.session.set({ wsWasConnected: false });
-    retryCount = MAX_RETRIES; // prevent reconnect
     chrome.alarms.clear(ALARM_NAME);
     if (ws) {
       ws.close();
@@ -79,7 +82,7 @@ function createWebSocketClient(onCommand) {
 
   // Alarm-based reconnect backup
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === ALARM_NAME && !isConnected() && retryCount < MAX_RETRIES) {
+    if (alarm.name === ALARM_NAME && !isConnected() && !manualDisconnect) {
       connect();
     }
   });
