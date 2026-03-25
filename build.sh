@@ -24,6 +24,7 @@ zip -r "$ZIP_NAME" \
   formatter/ \
   lib/ \
   icons/icon-16.png \
+  icons/icon-32.png \
   icons/icon-48.png \
   icons/icon-128.png \
   LICENSE \

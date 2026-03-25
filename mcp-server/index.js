@@ -13,7 +13,6 @@ import { formatMarkdown } from './markdown-formatter.js';
 // --- Config ---
 const WS_PORT = 3456;
 const PING_INTERVAL = 20000;
-const DEFAULT_CLEANUP_DAYS = 7;
 const SESSIONS_DIR = process.env.FE_DEBUG_PATH || join(homedir(), 'Downloads', 'fe-debug', 'sessions');
 
 // Live stream — defaults to CWD/fe-debug/, overridable via start-recording param
@@ -239,35 +238,6 @@ const server = new McpServer({
   version: '0.1.0',
 });
 
-// Tool: list-debug-logs
-server.tool(
-  'list-debug-logs',
-  'List saved debug log sessions from ~/Downloads/fe-debug/sessions/. Auto-cleans sessions older than 7 days.',
-  {},
-  async () => {
-    const zips = await listZipFiles();
-
-    // Auto-cleanup old sessions
-    const cutoff = Date.now() - DEFAULT_CLEANUP_DAYS * 24 * 60 * 60 * 1000;
-    const old = zips.filter((z) => z.mtime.getTime() < cutoff);
-    for (const z of old) {
-      await unlink(z.path).catch(() => {});
-    }
-
-    const current = zips.filter((z) => z.mtime.getTime() >= cutoff);
-    const list = current.map((z) => `- ${z.filename} (${z.domain}, ${Math.round(z.size / 1024)}KB, ${z.mtime.toISOString()})`);
-
-    return {
-      content: [{
-        type: 'text',
-        text: current.length
-          ? `Found ${current.length} debug log(s)${old.length ? ` (cleaned ${old.length} old)` : ''}:\n${list.join('\n')}`
-          : 'No debug logs found.',
-      }],
-    };
-  }
-);
-
 // Tool: get-debug-log
 server.tool(
   'get-debug-log',
@@ -282,6 +252,10 @@ server.tool(
           const parts = [{ type: 'text', text: `## Live debug log (${data.entries.length} entries)\n\nSession: ${data.sessionMeta?.url || 'unknown'}` }];
           // Return raw entries as JSON for Claude to analyze
           parts.push({ type: 'text', text: '```json\n' + JSON.stringify(data.entries, null, 2) + '\n```' });
+
+          // Auto-clear after reading so user doesn't have to clear manually
+          sendToExtension({ type: 'CLEAR_LOG' }, 5000).catch(() => {});
+
           return { content: parts };
         }
       } catch (_) {
@@ -433,29 +407,6 @@ server.tool(
         content: [{ type: 'text', text: `Connected but unresponsive: ${err.message}` }],
       };
     }
-  }
-);
-
-// Tool: cleanup-debug-logs
-server.tool(
-  'cleanup-debug-logs',
-  'Delete old debug log sessions.',
-  { olderThanDays: z.number().optional().default(7).describe('Delete sessions older than N days') },
-  async ({ olderThanDays }) => {
-    const zips = await listZipFiles();
-    const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
-    let deleted = 0;
-
-    for (const z of zips) {
-      if (z.mtime.getTime() < cutoff) {
-        await unlink(z.path).catch(() => {});
-        deleted++;
-      }
-    }
-
-    return {
-      content: [{ type: 'text', text: `Deleted ${deleted} session(s) older than ${olderThanDays} days.` }],
-    };
   }
 );
 

@@ -144,9 +144,8 @@ With MCP mode, Claude Code controls the extension directly — no manual clickin
 | `get-status` | Check extension connection and recording status |
 | `start-recording` | Start capturing (configurable: console, userActions, network, componentState) |
 | `stop-recording` | Stop recording and return all captured entries + screenshots |
-| `get-debug-log` | Read latest debug log (live from extension or saved .zip files) |
-| `list-debug-logs` | List saved debug sessions from `~/Downloads/fe-debug/sessions/` |
-| `cleanup-debug-logs` | Delete sessions older than N days (default: 7) |
+| `get-debug-log` | Read latest debug log (live from extension, auto-clears after read) |
+| `get-live-log` | Read live debug log from local `fe-debug/debug-log.md` (no WS roundtrip) |
 
 ### Workflow Examples
 
@@ -161,11 +160,10 @@ Claude: Uses `stop-recording` → receives all entries (console errors, network 
 Claude: Analyzes the data and suggests a fix
 ```
 
-**Example 2: Read saved session**
+**Example 2: Read debug log**
 ```
 You: "Check my latest debug log"
-Claude: Uses `list-debug-logs` → finds saved .zip sessions
-Claude: Uses `get-debug-log` → reads markdown + screenshots from the latest session
+Claude: Uses `get-debug-log` → reads live entries from extension, auto-clears after read
 Claude: Provides analysis
 ```
 
