@@ -222,26 +222,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Handle download from offscreen document
   if (msg.type === 'EXPORT_READY') {
-    // User download (existing behavior)
     chrome.downloads.download({
       url: msg.dataUrl,
       filename: msg.filename,
       saveAs: false,
-    }).catch((err) => {
-      console.error('Download failed:', err);
-    });
-
-    // MCP auto-save: save ZIP to fe-debug/sessions/ for MCP server
-    const mcpFilename = `fe-debug/sessions/${msg.filename}`;
-    chrome.downloads.download({
-      url: msg.dataUrl,
-      filename: mcpFilename,
-      saveAs: false,
-      conflictAction: 'overwrite',
     }).then(() => {
       chrome.offscreen.closeDocument().catch(() => {});
     }).catch((err) => {
-      console.error('MCP save failed:', err);
+      console.error('Download failed:', err);
       chrome.offscreen.closeDocument().catch(() => {});
     });
     return false;

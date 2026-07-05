@@ -13,7 +13,8 @@ import { formatMarkdown } from './markdown-formatter.js';
 // --- Config ---
 const WS_PORT = 3456;
 const PING_INTERVAL = 20000;
-const SESSIONS_DIR = process.env.FE_DEBUG_PATH || join(homedir(), 'Downloads', 'fe-debug', 'sessions');
+// Sessions dir: env var > ~/.fe-debug/sessions (avoids macOS permission issues with ~/Downloads)
+const SESSIONS_DIR = process.env.FE_DEBUG_PATH || join(homedir(), '.fe-debug', 'sessions');
 
 // Live stream — defaults to CWD/fe-debug/, overridable via start-recording param
 let liveLogDir = process.cwd();
@@ -27,99 +28,122 @@ let pendingRequests = new Map();
 let requestIdCounter = 0;
 
 // --- WebSocket Server ---
-// Kill any existing process on WS_PORT before binding (prevents port conflicts across sessions)
 import { execSync } from 'child_process';
-try {
-  const pid = execSync(`lsof -ti :${WS_PORT}`, { encoding: 'utf8' }).trim();
-  if (pid) {
-    execSync(`kill ${pid}`);
-    console.error(`[fe-debug-mcp] Killed old process on port ${WS_PORT} (PID ${pid})`);
-    // Brief delay for port release
-    execSync('sleep 0.5');
-  }
-} catch (_) {
-  // No process on port — normal case
-}
-
-const wss = new WebSocketServer({ port: WS_PORT });
+let wss = null;
 let pingTimer = null;
 
-wss.on('connection', (ws) => {
-  // Close old connection and reject its pending requests
-  if (extensionWs && extensionWs.readyState <= 1) {
-    extensionWs.close(1000, 'Replaced by new connection');
-  }
-  for (const [reqId, pending] of pendingRequests.entries()) {
-    pending.resolve({ type: 'ERROR', message: 'Connection replaced' });
-    pendingRequests.delete(reqId);
-  }
-
-  extensionWs = ws;
-  console.error('[fe-debug-mcp] Extension connected via WebSocket');
-
-  // Keepalive ping every 20s
-  if (pingTimer) clearInterval(pingTimer);
-  pingTimer = setInterval(() => {
-    if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify({ type: 'PING' }));
-    }
-  }, PING_INTERVAL);
-
-  ws.on('message', (raw) => {
-    try {
-      const msg = JSON.parse(raw.toString());
-
-      // Handle PONG (keepalive)
-      if (msg.type === 'PONG') return;
-
-      // Handle streamed entries — regenerate fe-debug/debug-log.md
-      if (msg.type === 'STREAM_ENTRIES' && msg.entries) {
-        handleStreamEntries(msg.entries, msg.domain).catch((err) =>
-          console.error('[fe-debug-mcp] Stream write error:', err)
-        );
-        return;
-      }
-
-      // Handle streamed screenshot — save to fe-debug/screenshots/
-      if (msg.type === 'STREAM_SCREENSHOT' && msg.screenshot) {
-        handleStreamScreenshot(msg.screenshot).catch((err) =>
-          console.error('[fe-debug-mcp] Screenshot save error:', err)
-        );
-        return;
-      }
-
-      // Route response to pending request by _requestId only
-      if (msg._requestId && pendingRequests.has(msg._requestId)) {
-        const { resolve } = pendingRequests.get(msg._requestId);
-        pendingRequests.delete(msg._requestId);
-        resolve(msg);
-        return;
-      }
-    } catch (err) {
-      console.error('[fe-debug-mcp] WS message parse error:', err);
-    }
+function createWsServer() {
+  return new Promise((resolve) => {
+    const server = new WebSocketServer({ port: WS_PORT });
+    server.on('listening', () => {
+      console.error(`[fe-debug-mcp] WebSocket server listening on port ${WS_PORT}`);
+      resolve(server);
+    });
+    server.on('error', (err) => {
+      console.error(`[fe-debug-mcp] WebSocket server error: ${err.message}`);
+      resolve(null);
+    });
   });
+}
 
-  ws.on('close', () => {
-    extensionWs = null;
-    if (pingTimer) {
-      clearInterval(pingTimer);
-      pingTimer = null;
+async function startWsServer() {
+  // Kill any existing process on WS_PORT before binding
+  try {
+    const pid = execSync(`lsof -ti :${WS_PORT}`, { encoding: 'utf8' }).trim();
+    if (pid) {
+      const myPid = String(process.pid);
+      const pids = pid.split('\n').filter(p => p.trim() !== myPid);
+      for (const p of pids) {
+        execSync(`kill ${p}`);
+        console.error(`[fe-debug-mcp] Killed old process on port ${WS_PORT} (PID ${p})`);
+      }
+      if (pids.length > 0) await new Promise(r => setTimeout(r, 500));
     }
-    // Reject all pending requests on disconnect
+  } catch (_) {
+    // No process on port — normal case
+  }
+
+  wss = await createWsServer();
+  if (!wss) {
+    // Retry once after delay
+    console.error(`[fe-debug-mcp] Retrying WS bind in 1.5s...`);
+    await new Promise(r => setTimeout(r, 1500));
+    wss = await createWsServer();
+  }
+  if (wss) setupWsHandlers();
+}
+
+function setupWsHandlers() {
+  wss.on('connection', (ws) => {
+    // Close old connection and reject its pending requests
+    if (extensionWs && extensionWs.readyState <= 1) {
+      extensionWs.close(1000, 'Replaced by new connection');
+    }
     for (const [reqId, pending] of pendingRequests.entries()) {
-      pending.resolve({ type: 'ERROR', message: 'Extension disconnected' });
+      pending.resolve({ type: 'ERROR', message: 'Connection replaced' });
       pendingRequests.delete(reqId);
     }
-    console.error('[fe-debug-mcp] Extension disconnected');
+
+    extensionWs = ws;
+    console.error('[fe-debug-mcp] Extension connected via WebSocket');
+
+    // Keepalive ping every 20s
+    if (pingTimer) clearInterval(pingTimer);
+    pingTimer = setInterval(() => {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'PING' }));
+      }
+    }, PING_INTERVAL);
+
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+
+        if (msg.type === 'PONG') return;
+
+        if (msg.type === 'STREAM_ENTRIES' && msg.entries) {
+          handleStreamEntries(msg.entries, msg.domain).catch((err) =>
+            console.error('[fe-debug-mcp] Stream write error:', err)
+          );
+          return;
+        }
+
+        if (msg.type === 'STREAM_SCREENSHOT' && msg.screenshot) {
+          handleStreamScreenshot(msg.screenshot).catch((err) =>
+            console.error('[fe-debug-mcp] Screenshot save error:', err)
+          );
+          return;
+        }
+
+        if (msg._requestId && pendingRequests.has(msg._requestId)) {
+          const { resolve } = pendingRequests.get(msg._requestId);
+          pendingRequests.delete(msg._requestId);
+          resolve(msg);
+          return;
+        }
+      } catch (err) {
+        console.error('[fe-debug-mcp] WS message parse error:', err);
+      }
+    });
+
+    ws.on('close', () => {
+      extensionWs = null;
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+      for (const [reqId, pending] of pendingRequests.entries()) {
+        pending.resolve({ type: 'ERROR', message: 'Extension disconnected' });
+        pendingRequests.delete(reqId);
+      }
+      console.error('[fe-debug-mcp] Extension disconnected');
+    });
   });
-});
 
-wss.on('error', (err) => {
-  console.error(`[fe-debug-mcp] WebSocket server error: ${err.message}`);
-});
-
-console.error(`[fe-debug-mcp] WebSocket server listening on port ${WS_PORT}`);
+  wss.on('error', (err) => {
+    console.error(`[fe-debug-mcp] WebSocket server error: ${err.message}`);
+  });
+}
 
 // Send command to extension and wait for response matched by _requestId
 function sendToExtension(command, timeoutMs = 10000) {
@@ -252,9 +276,6 @@ server.tool(
           const parts = [{ type: 'text', text: `## Live debug log (${data.entries.length} entries)\n\nSession: ${data.sessionMeta?.url || 'unknown'}` }];
           // Return raw entries as JSON for Claude to analyze
           parts.push({ type: 'text', text: '```json\n' + JSON.stringify(data.entries, null, 2) + '\n```' });
-
-          // Auto-clear after reading so user doesn't have to clear manually
-          sendToExtension({ type: 'CLEAR_LOG' }, 5000).catch(() => {});
 
           return { content: parts };
         }
@@ -439,5 +460,6 @@ server.tool(
 );
 
 // --- Start ---
+await startWsServer();
 const transport = new StdioServerTransport();
 await server.connect(transport);
