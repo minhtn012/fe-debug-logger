@@ -27,4 +27,20 @@
     }
     return false;
   });
+
+  // Auto-resume: on init (page load / reload / navigation / newly opened tab),
+  // ask background whether a recording is active. If so, re-activate MAIN world
+  // capture so it survives reloads and covers every tab — no new permission needed.
+  // In practice the async round-trip to background far outlasts the synchronous MAIN
+  // world injection at document_start, so its START_CAPTURE listener is ready by the
+  // time we post. startCapture() is idempotent, so a duplicate START (this handshake
+  // racing the Record broadcast) is harmless.
+  chrome.runtime
+    .sendMessage({ type: 'GET_STATUS' })
+    .then((resp) => {
+      if (resp && resp.recording) {
+        window.postMessage({ __source: SIGNATURE, type: 'START_CAPTURE', config: resp.config || {} }, '*');
+      }
+    })
+    .catch(() => {});
 })();

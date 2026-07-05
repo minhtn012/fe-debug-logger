@@ -38,6 +38,10 @@
   };
 
   function startCapture(cfg) {
+    // Idempotent: a duplicate START_CAPTURE (e.g. the Record broadcast racing the
+    // auto-resume handshake) must not re-wrap console/fetch/XHR a second time —
+    // that would double every entry and leave hooks installed after STOP.
+    if (recording) return;
     recording = true;
     config = cfg;
 
@@ -58,6 +62,7 @@
   }
 
   function stopCapture() {
+    if (!recording) return;
     recording = false;
     try { captures.console.stop(); } catch (_) {}
     try { captures.userAction.stop(); } catch (_) {}

@@ -4,6 +4,8 @@ let entryCounter = 0;
 let annotationCounter = 0;
 let screenshotCounter = 0;
 const MAX_SCREENSHOTS = 5;
+const MAX_ENTRIES = 2000; // Cap log entries to stay well under chrome.storage.local quota (~10MB)
+let entryLimitWarned = false;
 const STREAM_ALARM = 'stream-entries';
 let lastStreamedSeq = -1;
 
@@ -13,6 +15,7 @@ chrome.storage.session.get(['recording', 'entryCounter', 'annotationCounter', 's
   annotationCounter = data.annotationCounter || 0;
   screenshotCounter = data.screenshotCounter || 0;
   lastStreamedSeq = data.lastStreamedSeq ?? -1;
+  entryLimitWarned = entryCounter > MAX_ENTRIES; // already capped+warned if past the limit
 });
 
 // WebSocket client for MCP server communication
@@ -122,9 +125,16 @@ chrome.commands.onCommand.addListener((command) => {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GET_STATUS') {
-    chrome.storage.session.get(['recording', 'config'], (data) => {
+    chrome.storage.session.get(['recording', 'config', 'recordingWindowId'], (data) => {
+      // Scope auto-resume to the recording window: a content script in another window
+      // must not resume capture. Popup/other senders (no sender.tab) always get the
+      // true state for the badge/UI.
+      const inScope =
+        sender.tab == null ||
+        data.recordingWindowId == null ||
+        sender.tab.windowId === data.recordingWindowId;
       sendResponse({
-        recording: !!data.recording,
+        recording: !!data.recording && inScope,
         entryCount: entryCounter,
         annotationCount: annotationCounter,
         config: data.config || null,
@@ -207,6 +217,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         annotationCounter = 0;
         screenshotCounter = 0;
         lastStreamedSeq = -1;
+        entryLimitWarned = false;
         // Clear dedup keys from session storage
         chrome.storage.session.get(null, (sessionData) => {
           const dedupKeys = Object.keys(sessionData).filter((k) => k.startsWith('dedup_'));
@@ -257,9 +268,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'PAGE_META') {
     chrome.storage.local.get(['sessionMeta'], (data) => {
       const meta = data.sessionMeta || {};
-      meta.url = msg.url || meta.url;
-      meta.userAgent = msg.userAgent || '';
-      meta.viewport = msg.viewport || '';
+      // First url wins: keep the primary/active-tab url. With multi-tab capture
+      // PAGE_META arrives from every tab — without this guard a background tab would
+      // clobber the session url. userAgent/viewport carry no per-tab meaning worth
+      // pinning, so let the latest reporter fill them.
+      if (!meta.url && msg.url) meta.url = msg.url;
+      meta.userAgent = msg.userAgent || meta.userAgent || '';
+      meta.viewport = msg.viewport || meta.viewport || '';
       chrome.storage.local.set({ sessionMeta: meta });
     });
     return false;
@@ -351,6 +366,17 @@ function streamScreenshot(dataUrl, annotationId, mode) {
 
 // Store a new unique log entry and track its dedupKey
 function storeNewEntry(entryData) {
+  if (entryCounter >= MAX_ENTRIES) {
+    if (entryLimitWarned) return; // cap reached — drop further entries silently
+    // Write exactly one warning entry, then stop recording new entries.
+    entryLimitWarned = true;
+    entryData = {
+      category: 'console',
+      type: 'warn',
+      message: `[fe-debug] Entry limit (${MAX_ENTRIES}) reached — further entries dropped.`,
+      timestamp: new Date().toISOString(),
+    };
+  }
   const key = `log_${Date.now()}_${entryCounter}`;
   const entry = { ...entryData, _key: key, _seq: entryCounter };
   chrome.storage.local.set({ [key]: entry });
@@ -371,6 +397,7 @@ function startRecording(config, callback) {
       entryCounter = 0;
       annotationCounter = 0;
       screenshotCounter = 0;
+      entryLimitWarned = false;
       const sessionMeta = {
         url: '',
         startTime: new Date().toISOString(),
@@ -381,12 +408,23 @@ function startRecording(config, callback) {
       chrome.storage.session.set({ recording: true, config, entryCounter: 0, annotationCounter: 0, screenshotCounter: 0 });
       chrome.storage.local.set({ sessionMeta });
 
+      // Scope capture to the window where recording started (privacy: don't span
+      // unrelated windows). Seed sessionMeta.url from the active tab, remember its
+      // windowId, and broadcast START_CAPTURE to every tab in that window — covering
+      // all open tabs and any the user switches to within it. Tabs without our content
+      // script (chrome://, Web Store) reject sendMessage — swallow per tab.
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]) {
-          sessionMeta.url = tabs[0].url || '';
-          chrome.storage.local.set({ sessionMeta });
-          chrome.tabs.sendMessage(tabs[0].id, { type: 'START_CAPTURE', config }).catch(() => {});
-        }
+        const activeTab = tabs[0];
+        if (!activeTab) return;
+        sessionMeta.url = activeTab.url || '';
+        chrome.storage.local.set({ sessionMeta });
+        const windowId = activeTab.windowId;
+        chrome.storage.session.set({ recordingWindowId: windowId });
+        chrome.tabs.query({ windowId }, (winTabs) => {
+          for (const tab of winTabs) {
+            if (tab.id != null) chrome.tabs.sendMessage(tab.id, { type: 'START_CAPTURE', config }).catch(() => {});
+          }
+        });
       });
 
       chrome.action.setBadgeText({ text: 'REC' });
@@ -399,14 +437,16 @@ function startRecording(config, callback) {
 
 function stopRecording(callback) {
   stopStreaming();
-  chrome.storage.session.set({ recording: false });
+  chrome.storage.session.set({ recording: false, recordingWindowId: null });
   chrome.storage.local.get(['sessionMeta'], (data) => {
     const meta = data.sessionMeta || {};
     meta.endTime = new Date().toISOString();
     chrome.storage.local.set({ sessionMeta: meta }, () => {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]) {
-          chrome.tabs.sendMessage(tabs[0].id, { type: 'STOP_CAPTURE' }).catch(() => {});
+      // Broadcast STOP_CAPTURE to every tab (all windows) so any tab that ever resumed
+      // capture is guaranteed to stop, regardless of which window it is in now.
+      chrome.tabs.query({}, (tabs) => {
+        for (const tab of tabs) {
+          if (tab.id != null) chrome.tabs.sendMessage(tab.id, { type: 'STOP_CAPTURE' }).catch(() => {});
         }
       });
       chrome.action.setBadgeText({ text: '' });
