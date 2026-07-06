@@ -16,6 +16,23 @@ const PING_INTERVAL = 20000;
 // Sessions dir: env var > ~/.fe-debug/sessions (avoids macOS permission issues with ~/Downloads)
 const SESSIONS_DIR = process.env.FE_DEBUG_PATH || join(homedir(), '.fe-debug', 'sessions');
 
+// WS origin allowlist. WebSockets aren't bound by same-origin policy, so any web page
+// the user opens could otherwise connect and inject fake STREAM_ENTRIES (prompt
+// injection). Only accept chrome-extension:// origins. FE_DEBUG_EXT_IDS (comma-separated
+// extension IDs) restricts to specific IDs for dev with unpacked builds; unset = accept
+// any chrome-extension:// origin (still blocks every web page — the main threat).
+const EXT_ID_ALLOWLIST = (process.env.FE_DEBUG_EXT_IDS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function isAllowedOrigin(origin) {
+  if (!origin || !origin.startsWith('chrome-extension://')) return false;
+  if (EXT_ID_ALLOWLIST.length === 0) return true;
+  const id = origin.slice('chrome-extension://'.length).replace(/\/$/, '');
+  return EXT_ID_ALLOWLIST.includes(id);
+}
+
 // Live stream — defaults to CWD/fe-debug/, overridable via start-recording param
 let liveLogDir = process.cwd();
 let liveEntries = [];
@@ -27,54 +44,67 @@ let extensionWs = null;
 let pendingRequests = new Map();
 let requestIdCounter = 0;
 
+// Keep this long-lived stdio server alive through stray socket/async errors instead of
+// crashing (which would silently drop the extension bridge). Log and continue.
+process.on('uncaughtException', (err) => console.error('[fe-debug-mcp] Uncaught exception:', err));
+process.on('unhandledRejection', (err) => console.error('[fe-debug-mcp] Unhandled rejection:', err));
+
 // --- WebSocket Server ---
-import { execSync } from 'child_process';
 let wss = null;
 let pingTimer = null;
 
 function createWsServer() {
   return new Promise((resolve) => {
-    const server = new WebSocketServer({ port: WS_PORT });
+    // Bind to loopback only. The origin check trusts the browser-set Origin header,
+    // which only holds against browser clients — a non-browser client on the LAN could
+    // forge it. Binding to 127.0.0.1 keeps the socket off the network entirely, so the
+    // localhost threat model actually holds. The extension connects to ws://localhost,
+    // which resolves to loopback, so this is transparent to it.
+    const server = new WebSocketServer({ port: WS_PORT, host: '127.0.0.1' });
     server.on('listening', () => {
       console.error(`[fe-debug-mcp] WebSocket server listening on port ${WS_PORT}`);
       resolve(server);
     });
     server.on('error', (err) => {
-      console.error(`[fe-debug-mcp] WebSocket server error: ${err.message}`);
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[fe-debug-mcp] Port ${WS_PORT} busy — another MCP server instance may be running. Check with: lsof -i :${WS_PORT}`);
+      } else {
+        console.error(`[fe-debug-mcp] WebSocket server error: ${err.message}`);
+      }
       resolve(null);
     });
   });
 }
 
 async function startWsServer() {
-  // Kill any existing process on WS_PORT before binding
-  try {
-    const pid = execSync(`lsof -ti :${WS_PORT}`, { encoding: 'utf8' }).trim();
-    if (pid) {
-      const myPid = String(process.pid);
-      const pids = pid.split('\n').filter(p => p.trim() !== myPid);
-      for (const p of pids) {
-        execSync(`kill ${p}`);
-        console.error(`[fe-debug-mcp] Killed old process on port ${WS_PORT} (PID ${p})`);
-      }
-      if (pids.length > 0) await new Promise(r => setTimeout(r, 500));
-    }
-  } catch (_) {
-    // No process on port — normal case
-  }
-
+  // Do NOT kill whoever holds the port — it may be an unrelated user process.
+  // Bind directly; on EADDRINUSE retry once (covers an old instance still exiting),
+  // then give up gracefully. File-based stdio tools keep working either way.
   wss = await createWsServer();
   if (!wss) {
-    // Retry once after delay
     console.error(`[fe-debug-mcp] Retrying WS bind in 1.5s...`);
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 1500));
     wss = await createWsServer();
   }
   if (wss) setupWsHandlers();
 }
 
 function setupWsHandlers() {
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    // A socket error with no listener throws as an uncaught exception in `ws` and would
+    // crash the whole server (e.g. a rejected/hostile peer RSTing mid-close-handshake).
+    // Attach before anything else so both the reject and accept paths are covered.
+    ws.on('error', (err) => console.error(`[fe-debug-mcp] WS socket error: ${err.message}`));
+
+    // Reject any connection that isn't from an allowed Chrome extension origin.
+    // Blocks web pages (prompt injection) from hijacking the extension's WS slot.
+    const origin = req.headers.origin;
+    if (!isAllowedOrigin(origin)) {
+      console.error(`[fe-debug-mcp] Rejected WS connection from origin: ${origin || '(none)'}`);
+      ws.close(1008, 'Forbidden origin');
+      return;
+    }
+
     // Close old connection and reject its pending requests
     if (extensionWs && extensionWs.readyState <= 1) {
       extensionWs.close(1000, 'Replaced by new connection');

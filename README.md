@@ -69,6 +69,7 @@ npm install
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FE_DEBUG_PATH` | `~/Downloads/fe-debug/sessions/` | Directory for saved debug sessions |
+| `FE_DEBUG_EXT_IDS` | _(unset)_ | Comma-separated Chrome extension IDs allowed to connect over WebSocket. Unset accepts any `chrome-extension://` origin (blocks all web pages). Set this to your unpacked extension's ID to lock the server to it. |
 
 ---
 
@@ -180,7 +181,8 @@ Claude: Uses `start-recording` with config:
 |-------|----------|
 | "Extension not connected" | Open any webpage in Chrome with the extension installed |
 | MCP server not showing in Claude Code | Check `~/.claude/settings.json` path is absolute and correct |
-| WebSocket won't connect | Make sure port 3456 is not in use: `lsof -i :3456` |
+| WebSocket won't connect | Check what holds port 3456: `lsof -i :3456`. The server no longer kills that process — stop it manually or close the other MCP instance. |
+| Extension connection rejected (`Forbidden origin` in server log) | The server only accepts `chrome-extension://` origins. If you set `FE_DEBUG_EXT_IDS`, make sure it lists your extension's actual ID (see `chrome://extensions`). |
 | Extension disconnects frequently | Normal — it auto-reconnects up to 3 times with 5s intervals |
 
 ---
