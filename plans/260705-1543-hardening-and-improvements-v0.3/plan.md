@@ -10,7 +10,7 @@
 |---|-------|---------|-----------|--------|
 | 01 | [Recording resilience](phase-01-recording-resilience.md) | Critical | — | IMPLEMENTED (chờ manual validation) |
 | 02 | [WS security & server hardening](phase-02-ws-security-server-hardening.md) | Critical | — | DONE |
-| 03 | [MCP token efficiency](phase-03-mcp-token-efficiency.md) | High | 02 (cùng file index.js) | PENDING |
+| 03 | [MCP token efficiency](phase-03-mcp-token-efficiency.md) | High | 02 (cùng file index.js) | DONE |
 | 04 | [Repo hygiene & docs](phase-04-repo-hygiene-docs.md) | Medium | 01–03 (version bump cuối) | PENDING |
 | 05 | [Testing & CI](phase-05-testing-ci.md) | Medium | 01–03 (test code mới) | PENDING |
 | 06 | [High-value features](phase-06-high-value-features.md) | Nice-to-have | 01, 02 | PENDING |

@@ -286,6 +286,62 @@ async function handleStreamScreenshot(screenshot) {
   }
 }
 
+// --- Entry summarization / filtering (token efficiency) ---
+// Category values come from the capture modules: console | action | network | state | annotation.
+const CATEGORY_LABELS = { console: 'console', action: 'userAction', network: 'network', state: 'componentState', annotation: 'annotation' };
+
+// One-line overview of the FULL session so Claude knows what was captured (and truncated).
+function summarizeEntries(entries, shownCount) {
+  const counts = {};
+  let consoleErr = 0;
+  let consoleWarn = 0;
+  for (const e of entries) {
+    const cat = e.category || 'other';
+    counts[cat] = (counts[cat] || 0) + 1;
+    if (cat === 'console') {
+      if (e.type === 'warn') consoleWarn++;
+      else consoleErr++;
+    }
+  }
+  const parts = Object.entries(counts).map(([cat, n]) =>
+    cat === 'console' ? `${n} console (${consoleErr} error, ${consoleWarn} warn)` : `${n} ${CATEGORY_LABELS[cat] || cat}`
+  );
+  let summary = `${entries.length} entries: ${parts.join(', ') || 'none'}.`;
+  if (typeof shownCount === 'number' && shownCount < entries.length) {
+    summary += ` Showing last ${shownCount} of ${entries.length}.`;
+  }
+  return summary;
+}
+
+// Filter by console level (non-console categories always kept), then keep the last `tail`.
+function filterEntries(entries, { tail = 50, level = 'all' } = {}) {
+  let filtered = entries;
+  if (level !== 'all') {
+    filtered = entries.filter((e) => {
+      if (e.category !== 'console') return true;
+      const isWarn = e.type === 'warn';
+      return level === 'warn' ? isWarn : !isWarn; // 'error' = everything that isn't a warn
+    });
+  }
+  if (typeof tail === 'number' && tail >= 0 && filtered.length > tail) {
+    filtered = filtered.slice(-tail);
+  }
+  return filtered;
+}
+
+// Compact summary line + markdown of the filtered subset.
+function renderLogMarkdown(meta, allEntries, screenshotMap, opts) {
+  const filtered = filterEntries(allEntries, opts);
+  const summary = summarizeEntries(allEntries, filtered.length);
+  // The section counts below come from formatMarkdown over the filtered subset, so they
+  // can disagree with the full-session summary above. Flag it when we truncated.
+  const note = filtered.length < allEntries.length
+    ? '\n_Section counts below reflect only the shown window, not the whole session._'
+    : '';
+  const md = formatMarkdown({ meta: meta || {}, entries: filtered, screenshotMap: screenshotMap || {} });
+  return `**Summary:** ${summary}${note}\n\n${md}`;
+}
+
 // --- MCP Server ---
 const server = new McpServer({
   name: 'fe-debug',
@@ -295,26 +351,35 @@ const server = new McpServer({
 // Tool: get-debug-log
 server.tool(
   'get-debug-log',
-  'Read a debug log session. Returns markdown + screenshots. Defaults to latest session.',
-  { url: z.string().optional().describe('Filter by domain (partial match)') },
-  async ({ url }) => {
+  'Read a debug log session as markdown. Defaults to a compact summary + last 50 entries, no screenshots. Widen with tail/level/includeScreenshots. (tail/level apply to live sessions; saved ZIPs return the full rendered log.)',
+  {
+    url: z.string().optional().describe('Filter by domain (partial match)'),
+    tail: z.number().int().positive().optional().default(50).describe('Return only the last N entries (default 50)'),
+    level: z.enum(['all', 'error', 'warn']).optional().default('all').describe('Filter console entries by level; non-console entries always kept'),
+    includeScreenshots: z.boolean().optional().default(false).describe('Attach screenshots as images (default false)'),
+  },
+  async ({ url, tail, level, includeScreenshots }) => {
     // Try live data from extension first
     if (extensionWs && extensionWs.readyState === extensionWs.OPEN) {
       try {
         const data = await sendToExtension({ type: 'GET_LOG' }, 30000);
         if (data.entries && data.entries.length > 0) {
-          const parts = [{ type: 'text', text: `## Live debug log (${data.entries.length} entries)\n\nSession: ${data.sessionMeta?.url || 'unknown'}` }];
-          // Return raw entries as JSON for Claude to analyze
-          parts.push({ type: 'text', text: '```json\n' + JSON.stringify(data.entries, null, 2) + '\n```' });
-
-          return { content: parts };
+          const text = renderLogMarkdown(data.sessionMeta, data.entries, data.screenshotMap, { tail, level });
+          const content = [{ type: 'text', text: `## Live debug log\n\n${text}` }];
+          if (includeScreenshots && data.screenshots) {
+            for (const ss of data.screenshots) {
+              if (ss.base64) content.push({ type: 'image', data: ss.base64, mimeType: 'image/png' });
+            }
+          }
+          return { content };
         }
       } catch (_) {
         // Fall through to file-based
       }
     }
 
-    // File-based: read from saved ZIPs
+    // File-based: read from saved ZIPs. These store pre-rendered markdown (no structured
+    // entries), so tail/level can't be applied here — screenshots stay opt-in.
     const zips = await listZipFiles();
     if (!zips.length) {
       return { content: [{ type: 'text', text: 'No debug logs found. Record a session first.' }] };
@@ -329,12 +394,10 @@ server.tool(
     const { markdown, screenshots } = readZipContents(target.path);
     const content = [{ type: 'text', text: markdown || 'Empty debug log.' }];
 
-    for (const ss of screenshots) {
-      content.push({
-        type: 'image',
-        data: ss.base64,
-        mimeType: 'image/png',
-      });
+    if (includeScreenshots) {
+      for (const ss of screenshots) {
+        content.push({ type: 'image', data: ss.base64, mimeType: 'image/png' });
+      }
     }
 
     return { content };
@@ -391,9 +454,11 @@ server.tool(
 // Tool: stop-recording
 server.tool(
   'stop-recording',
-  'Stop recording and return captured debug data from Chrome extension.',
-  {},
-  async () => {
+  'Stop recording and return a compact summary + last 50 entries as markdown. Screenshots are opt-in. Use get-debug-log with tail/level/includeScreenshots for the full log.',
+  {
+    includeScreenshots: z.boolean().optional().default(false).describe('Attach screenshots as images (default false)'),
+  },
+  async ({ includeScreenshots }) => {
     try {
       const resp = await sendToExtension({ type: 'STOP_RECORDING' });
 
@@ -407,13 +472,17 @@ server.tool(
         };
       }
 
-      const content = [{ type: 'text', text: `Recording stopped. ${resp.entryCount || 0} entries captured.` }];
+      const entries = logData.entries || [];
+      const content = [];
 
-      if (logData.entries && logData.entries.length > 0) {
-        content.push({ type: 'text', text: '```json\n' + JSON.stringify(logData.entries, null, 2) + '\n```' });
+      if (entries.length > 0) {
+        const text = renderLogMarkdown(logData.sessionMeta, entries, logData.screenshotMap, { tail: 50, level: 'all' });
+        content.push({ type: 'text', text: `Recording stopped.\n\n${text}\n\n_Use get-debug-log with tail/level/includeScreenshots for more._` });
+      } else {
+        content.push({ type: 'text', text: `Recording stopped. ${resp.entryCount || 0} entries captured.` });
       }
 
-      if (logData.screenshots) {
+      if (includeScreenshots && logData.screenshots) {
         for (const ss of logData.screenshots) {
           if (ss.base64) {
             content.push({ type: 'image', data: ss.base64, mimeType: 'image/png' });
@@ -464,15 +533,30 @@ server.tool(
 // Tool: get-live-log
 server.tool(
   'get-live-log',
-  'Read live debug log from fe-debug/debug-log.md in the project directory. Faster than get-debug-log — no WS roundtrip needed.',
-  {},
-  async () => {
-    const mdPath = join(liveLogDir, 'fe-debug', 'debug-log.md');
-    try {
-      const markdown = await readFile(mdPath, 'utf8');
-      const content = [{ type: 'text', text: markdown }];
+  'Read the current live debug log (compact summary + last 50 entries, no screenshots by default). Faster than get-debug-log — no WS roundtrip. Widen with tail/level/includeScreenshots.',
+  {
+    tail: z.number().int().positive().optional().default(50).describe('Return only the last N entries (default 50)'),
+    level: z.enum(['all', 'error', 'warn']).optional().default('all').describe('Filter console entries by level; non-console entries always kept'),
+    includeScreenshots: z.boolean().optional().default(false).describe('Attach screenshots as images (default false)'),
+  },
+  async ({ tail, level, includeScreenshots }) => {
+    let content;
+    if (liveEntries.length > 0) {
+      // Prefer in-memory entries so we can filter/tail and show an accurate summary.
+      const text = renderLogMarkdown(liveSessionMeta, liveEntries, liveScreenshotMap, { tail, level });
+      content = [{ type: 'text', text }];
+    } else {
+      // Fallback: rendered markdown file (no structured entries — can't filter).
+      const mdPath = join(liveLogDir, 'fe-debug', 'debug-log.md');
+      try {
+        const markdown = await readFile(mdPath, 'utf8');
+        content = [{ type: 'text', text: markdown }];
+      } catch {
+        return { content: [{ type: 'text', text: `No live log at ${mdPath}. Start recording first.` }] };
+      }
+    }
 
-      // Include screenshots as images
+    if (includeScreenshots) {
       const ssDir = join(liveLogDir, 'fe-debug', 'screenshots');
       const ssFiles = await readdir(ssDir).catch(() => []);
       for (const f of ssFiles) {
@@ -481,11 +565,9 @@ server.tool(
           content.push({ type: 'image', data: imgData.toString('base64'), mimeType: 'image/png' });
         }
       }
-
-      return { content };
-    } catch {
-      return { content: [{ type: 'text', text: `No live log at ${mdPath}. Start recording first.` }] };
     }
+
+    return { content };
   }
 );
 
