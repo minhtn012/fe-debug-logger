@@ -1,0 +1,11 @@
+{
+  "name": "fe-debug-logger",
+  "private": true,
+  "description": "Dev tooling only (guide videos). The extension itself has no build step, see build.sh.",
+  "scripts": {
+    "video": "python3 ~/.claude/skills/fe-guide-video/scripts/make-video.py"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

@@ -17,3 +17,5 @@ plans/
 *.zip
 *.crx
 *.pem
+
+test-results/docs-video/

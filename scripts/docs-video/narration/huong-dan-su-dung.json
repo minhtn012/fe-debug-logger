@@ -1,0 +1,27 @@
+{
+  "voice": "Thùy Dung",
+  "say_voice": "Linh",
+  "say_rate": 175,
+  "segments": [
+    { "id": "intro", "say": "Xin chào. Video này hướng dẫn dùng tiện ích ép i đi bấc lóc gơ trên trình duyệt Chrome. Tiện ích có hai chế độ: phít bách để góp ý giao diện, và ri cót để ghi lại lỗi khi tái hiện bấc. Ví dụ trong video là website Rây oa pham." },
+
+    { "id": "f1", "say": "Phần một, góp ý giao diện. Mở trang cần góp ý, bấm biểu tượng của tiện ích trên thanh công cụ, rồi bấm nút phít bách. Chế độ góp ý được bật cho riêng trang web này." },
+    { "id": "f2", "say": "Góc dưới bên phải hiện nút Góp ý. Bấm vào đó, đặt tên cho phiên góp ý, rồi bấm Bắt đầu." },
+    { "id": "f3", "say": "Bấm Chọn e lơ mần. Trang được đóng băng, nên menu hay hiệu ứng đang mở vẫn giữ nguyên. Rê chuột để thấy khung chọn, rồi bấm vào phần muốn góp ý." },
+    { "id": "f4", "say": "Viết ghi chú, chọn loại là bấc hoặc góp ý, rồi bấm Lưu. Tiện ích tự chụp ảnh phần vừa chọn." },
+    { "id": "f5", "say": "Chế độ chọn vẫn bật, nên có thể góp ý tiếp. Lần này chọn nút Tìm hiểu về TV TPI, và để loại là góp ý." },
+    { "id": "f6", "say": "Góp ý xong thì bấm Dừng chọn, nút nổi hiện số mục đã lưu. Bấm Xong để kết thúc phiên, trang ri viu sẽ mở ra." },
+    { "id": "f7", "say": "Trang ri viu liệt kê từng mục kèm ảnh chụp, vị trí e lơ mần và đường dẫn trang. Có thể sửa ghi chú, đổi loại, hoặc xoá mục. Bên dưới là lỗi con xôn và lỗi mạng xảy ra trong lúc góp ý." },
+    { "id": "f8", "say": "Cuối cùng, bấm Cóp pi em đê để dán thẳng vào Clốt Cốt, hoặc xuất file mác đao, hay file díp kèm ảnh của từng mục." },
+
+    { "id": "p2", "say": "Phần hai, ghi log lỗi bằng chế độ ri cót." },
+    { "id": "r1", "say": "Mở pốp ắp của tiện ích. Nếu trang đang bật phít bách thì tắt đi. Giữ các loại dữ liệu cần ghi: lỗi con xôn, thao tác người dùng, mạng, và trạng thái com pô nừn. Rồi bấm xì tát." },
+    { "id": "r2", "say": "Giờ thao tác trên trang để tái hiện lỗi. Tiện ích ghi lại từng cú bấm, nội dung đã nhập, lỗi con xôn, và các yêu cầu mạng bị lỗi hoặc chậm." },
+    { "id": "r3", "say": "Muốn đánh dấu chỗ sai, mở pốp ắp và bấm a nô tết, hoặc dùng phím tắt ghi trên nút. Chọn e lơ mần, viết ghi chú, chọn mức độ và nhãn, rồi bấm Lưu." },
+    { "id": "r4", "say": "Cần ảnh chụp thì bấm xì crin sót, chọn xì léc ri giần, rồi kéo chuột quanh vùng cần chụp. Chụp xong, gõ ghi chú cho ảnh rồi bấm Sêu nốt, hoặc bấm Xờ kíp nếu không cần. Chọn phun pết nếu muốn chụp phần đang hiển thị." },
+    { "id": "r5", "say": "Tái hiện xong, bấm xì tóp. Pốp ắp cho biết đã ghi bao nhiêu sự kiện. Bấm cóp pi để dán vào Clốt Cốt, hoặc ếch pót để tải file về. Có ảnh chụp thì file tải về là file díp." },
+    { "id": "r6", "say": "Đây là file mác đao đã xuất: thông tin phiên, các a nô tết kèm ảnh chụp và cấu trúc e lơ mần, danh sách ảnh chụp kèm ghi chú, rồi đến thao tác người dùng và yêu cầu mạng. Đưa file này cho Clốt Cốt để tìm và sửa lỗi." },
+
+    { "id": "outro", "say": "Vậy là xong. Tóm lại: phít bách để góp ý giao diện, ri cót để ghi lỗi khi tái hiện bấc. Cảm ơn bạn đã theo dõi." }
+  ]
+}
