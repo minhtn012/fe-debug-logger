@@ -45,7 +45,7 @@ function createUserActionCapture(postLog) {
     try {
       let current = el;
       while (current) {
-        if (current.id === '__fe_debug_annotation_root__' || current.id === '__fe_debug_region_overlay__') return true;
+        if (current.id === '__fe_debug_annotation_root__' || current.id === '__fe_debug_region_overlay__' || current.id === '__fe_debug_shot_note__') return true;
         current = current.parentElement || (current.getRootNode && current.getRootNode().host);
       }
     } catch (_) {}
@@ -59,6 +59,25 @@ function createUserActionCapture(postLog) {
       timestamp: new Date().toISOString(),
       ...data,
     });
+  }
+
+  // Entry builders for the click and change listeners
+  function buildClickEntry(el) {
+    return {
+      event: 'click',
+      selector: getSelector(el),
+      tag: el.tagName,
+      text: truncate(el.textContent, 50),
+    };
+  }
+
+  function buildChangeEntry(el) {
+    return {
+      event: 'change',
+      selector: getSelector(el),
+      tag: el.tagName,
+      value: maskIfSensitive(el, el.value),
+    };
   }
 
   function addListener(event, handler) {
@@ -92,12 +111,7 @@ function createUserActionCapture(postLog) {
 
     addListener('click', (e) => {
       if (isAnnotationOverlay(e.target)) return;
-      log({
-        event: 'click',
-        selector: getSelector(e.target),
-        tag: e.target.tagName,
-        text: truncate(e.target.textContent, 50),
-      });
+      log(buildClickEntry(e.target));
     });
 
     addListener('input', (e) => {
@@ -107,12 +121,7 @@ function createUserActionCapture(postLog) {
 
     addListener('change', (e) => {
       if (isAnnotationOverlay(e.target)) return;
-      log({
-        event: 'change',
-        selector: getSelector(e.target),
-        tag: e.target.tagName,
-        value: maskIfSensitive(e.target, e.target.value),
-      });
+      log(buildChangeEntry(e.target));
     });
 
     addListener('submit', (e) => {
@@ -125,6 +134,7 @@ function createUserActionCapture(postLog) {
     });
 
     addListener('keydown', (e) => {
+      if (isAnnotationOverlay(e.target)) return;
       if (e.key === 'Enter' || e.key === 'Escape') {
         log({ event: 'keydown', key: e.key, selector: getSelector(e.target) });
       }

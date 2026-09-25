@@ -21,10 +21,7 @@ All captured data is stored **locally on your device** using the Chrome Storage 
 
 FE Debug Logger does **not** transmit any data to external services. There are no analytics, tracking pixels, or third-party integrations.
 
-The extension includes an optional WebSocket client for local MCP (Model Context Protocol) server integration. This connection is:
-- **Localhost only** — connects to a server running on your own machine
-- **Optional** — the extension works fully without it
-- **User-initiated** — no automatic data transmission
+Captured data leaves the browser only when you export or copy it yourself.
 
 ## Sensitive Data
 

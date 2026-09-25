@@ -20,8 +20,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 async function handleCopy(msg) {
   try {
-    const { sessionMeta, entries, screenshotMap } = msg.data;
-    const markdown = formatMarkdown({ meta: sessionMeta, entries, screenshotMap: screenshotMap || {} });
+    const { sessionMeta, entries, screenshotMap, screenshots } = msg.data;
+    const markdown = formatMarkdown({ meta: sessionMeta, entries, screenshotMap: screenshotMap || {}, screenshots });
     await navigator.clipboard.writeText(markdown);
     chrome.runtime.sendMessage({ type: 'COPY_READY' });
   } catch (err) {
@@ -31,8 +31,8 @@ async function handleCopy(msg) {
 
 async function handleExport(msg) {
   try {
-    const { sessionMeta, entries, screenshotMap, screenshotFiles } = msg.data;
-    const markdown = formatMarkdown({ meta: sessionMeta, entries, screenshotMap: screenshotMap || {} });
+    const { sessionMeta, entries, screenshotMap, screenshots, screenshotFiles } = msg.data;
+    const markdown = formatMarkdown({ meta: sessionMeta, entries, screenshotMap: screenshotMap || {}, screenshots });
 
     const zip = new JSZip();
     zip.file('debug-log.md', markdown);
@@ -81,7 +81,9 @@ function handleCrop(msg) {
         croppedDataUrl,
         screenshotId: msg.screenshotId,
         annotationId: msg.annotationId,
+        feedbackShotKey: msg.feedbackShotKey,
         mode: msg.mode,
+        tabId: msg.tabId,
       });
     };
     img.onerror = () => {

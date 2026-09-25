@@ -12,16 +12,14 @@ Chrome extension that captures frontend debug logs as structured Markdown — op
 - **User Action Tracking** — records clicks, form inputs, navigation with DOM selectors
 - **Network Monitoring** — logs HTTP errors (status >= 400) and slow requests (> 3s)
 - **Component State Snapshots** — auto-detects React & Vue, captures props/state trees
-- **DOM Annotation** — click elements to annotate with notes (`Cmd+Shift+A` / `Ctrl+Shift+A`)
+- **DOM Annotation** — click elements to annotate with notes (`Option+Shift+A` on Mac / `Alt+Shift+A`)
 - **Screenshot Capture** — full page or select region
 - **Selective Capture** — toggle categories independently
 - **Sensitive Data Masking** — auto-masks password/token/apiKey fields
 - **Structured Markdown Export** — session metadata, formatted tables, code blocks
-- **MCP Integration** — let Claude Code control recording programmatically
+- **Feedback Mode** — a floating button on the sites you enable: freeze the page, pick an element, write a bug or suggestion, review and export everything as one Markdown/ZIP (also shipped alone as the **FE Feedback** build)
 
 ## Install
-
-### 1. Install Chrome Extension
 
 **From Chrome Web Store** (coming soon)
 
@@ -36,46 +34,20 @@ Chrome extension that captures frontend debug logs as structured Markdown — op
 4. Click **Load unpacked** and select the cloned folder
 5. Pin the extension from the toolbar
 
-### 2. Install MCP Server (Optional)
+**Builds:** `bash build.sh` packs two store uploads from the same source:
 
-The MCP server lets Claude Code control the extension programmatically. Skip this if you only need manual usage.
+| Zip | What it is |
+|-----|-----------|
+| `fe-debug-logger-v<ver>.zip` | Full extension: popup, hotkey, Record, Annotate, Feedback |
+| `fe-feedback-v<ver>.zip` | Feedback only: no popup, no hotkeys; clicking the toolbar icon turns feedback on/off for the current site |
 
-```
-Claude Code ←→ MCP Server (stdio) ←→ WebSocket (localhost:3456) ←→ Chrome Extension
-```
-
-**Step 1:** Install dependencies:
-```bash
-cd mcp-server
-npm install
-```
-
-**Step 2:** Add to Claude Code MCP config (`~/.claude/settings.json`):
-```json
-{
-  "mcpServers": {
-    "fe-debug": {
-      "command": "node",
-      "args": ["/absolute/path/to/fe-debug-logger/mcp-server/index.js"]
-    }
-  }
-}
-```
-
-**Step 3:** Restart Claude Code. The extension auto-connects to the MCP server when you open any page in Chrome.
-
-**Environment Variables:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FE_DEBUG_PATH` | `~/Downloads/fe-debug/sessions/` | Directory for saved debug sessions |
-| `FE_DEBUG_EXT_IDS` | _(unset)_ | Comma-separated Chrome extension IDs allowed to connect over WebSocket. Unset accepts any `chrome-extension://` origin (blocks all web pages). Set this to your unpacked extension's ID to lock the server to it. |
+To try the FE Feedback build unpacked, unzip `fe-feedback-v<ver>.zip` and load that folder. Install only one of the two builds per Chrome profile — both inject into every page, so having both gives two floating buttons and double console/network hooks.
 
 ---
 
-## Usage: Manual Mode
+## Usage: Record
 
-Use the extension popup to capture debug data manually.
+Use the extension popup to capture debug data.
 
 ### Basic Workflow
 
@@ -98,7 +70,7 @@ Use the extension popup to capture debug data manually.
 
 Annotate specific UI elements with notes to highlight problem areas:
 
-1. Click **Annotate** in the popup (or press `Cmd+Shift+A` / `Ctrl+Shift+A`)
+1. Click **Annotate** in the popup (or press `Option+Shift+A` / `Alt+Shift+A`). Prefer the shortcut when the element is inside an open menu or dropdown: clicking the toolbar icon takes focus from the page and the menu closes, a shortcut does not
 2. Hover over elements — they'll be highlighted with a blue outline
 3. Click an element to select it
 4. Enter a note describing the issue (e.g., "This button doesn't respond on mobile")
@@ -106,16 +78,19 @@ Annotate specific UI elements with notes to highlight problem areas:
 6. Press `Esc` or click **Annotate** again to exit annotation mode
 7. Annotations appear in the exported Markdown with element context
 
+If the shortcut does nothing, open `chrome://extensions/shortcuts`: Chrome leaves the key empty when Chrome itself or another extension already uses it. Assign any free key there.
+
 ### Screenshot Capture
 
 Capture visual evidence alongside your debug logs:
 
 1. Click the **Screenshot** dropdown in the popup
 2. Choose a capture mode:
-   - **Full Page** — scrolls and stitches the entire page into one image
+   - **Full Page** — captures the visible part of the page
    - **Select Region** — drag a rectangle to capture a specific area
-3. Screenshots are embedded as base64 images in the export
-4. Maximum 5 screenshots per session to keep export size manageable
+3. After the capture a note box appears on the page: type what the screenshot shows and click **Save note** (or `Cmd/Ctrl+Enter`), or **Skip**
+4. The export lists each screenshot with its note under **Screenshots**; the PNG files go in the ZIP's `screenshots/` folder (Copy keeps the notes, without images)
+5. Maximum 5 screenshots per session to keep export size manageable
 
 ### Feed to Claude Code
 
@@ -132,58 +107,26 @@ The exported Markdown gives Claude Code full context: what the user did, what er
 
 ---
 
-## Usage: MCP Mode
+## Usage: Feedback Mode
 
-> **Prerequisite:** Complete [Install MCP Server](#2-install-mcp-server-optional) first.
+Collect UI feedback on a site without recording: each item is a screenshot of one element plus a note, with the console errors and failed/slow requests that happened meanwhile.
 
-With MCP mode, Claude Code controls the extension directly — no manual clicking needed.
+1. **Enable the site** — full build: open the popup and click **Feedback**; FE Feedback build: click the toolbar icon. A floating **Góp ý** button appears on every tab of that site (drag the `⋮⋮` grip to move it). Do the same again to turn it off.
+2. **Start a session** — click **Góp ý**, type a session name, press Enter.
+3. **Add items** — click **Chọn element**. The page freezes (animations, timers and hover menus stay as they are), so you can pick an element inside an open dropdown or tooltip. Choose **Bug** or **Góp ý**, write a note, save. `Esc` or **Dừng chọn** leaves the picker. Up to 50 items per session.
+4. **Finish** — click **Xong**. The review page opens.
+5. **Review** — edit notes, switch bug/suggestion, delete items, look at console errors and network issues, delete old sessions. Open it again at any time: right-click the toolbar icon → **Xem feedback đã lưu**, or **Xem feedback** in the popup (full build).
+6. **Export** — **Copy MD**, **Export MD**, or **Export ZIP** (Markdown + one PNG per item). Paste the Markdown into Claude Code, or unzip and point it at `debug-log.md`.
 
-### Available Tools
+Feedback data stays in `chrome.storage.local` until you delete the session on the review page. A site with a live feedback session cannot start a Record session, and the reverse.
 
-| Tool | Description |
-|------|-------------|
-| `get-status` | Check extension connection and recording status |
-| `start-recording` | Start capturing (configurable: console, userActions, network, componentState) |
-| `stop-recording` | Stop recording and return all captured entries + screenshots |
-| `get-debug-log` | Read latest debug log (live from extension, auto-clears after read) |
-| `get-live-log` | Read live debug log from local `fe-debug/debug-log.md` (no WS roundtrip) |
+### Limits of the page freeze
 
-### Workflow Examples
-
-**Example 1: Live capture**
-```
-You: "I'm seeing a bug on the checkout page. Start recording."
-Claude: Uses `start-recording` → extension begins capturing on your active tab
-
-You: "OK I just reproduced it. What happened?"
-Claude: Uses `stop-recording` → receives all entries (console errors, network failures,
-        user actions, component state) + screenshots
-Claude: Analyzes the data and suggests a fix
-```
-
-**Example 2: Read debug log**
-```
-You: "Check my latest debug log"
-Claude: Uses `get-debug-log` → reads live entries from extension, auto-clears after read
-Claude: Provides analysis
-```
-
-**Example 3: Targeted capture**
-```
-You: "Record only network errors and console logs, skip user actions"
-Claude: Uses `start-recording` with config:
-        { console: true, network: true, userActions: false, componentState: false }
-```
-
-### Troubleshooting MCP Connection
-
-| Issue | Solution |
-|-------|----------|
-| "Extension not connected" | Open any webpage in Chrome with the extension installed |
-| MCP server not showing in Claude Code | Check `~/.claude/settings.json` path is absolute and correct |
-| WebSocket won't connect | Check what holds port 3456: `lsof -i :3456`. The server no longer kills that process — stop it manually or close the other MCP instance. |
-| Extension connection rejected (`Forbidden origin` in server log) | The server only accepts `chrome-extension://` origins. If you set `FE_DEBUG_EXT_IDS`, make sure it lists your extension's actual ID (see `chrome://extensions`). |
-| Extension disconnects frequently | Normal — it auto-reconnects up to 3 times with 5s intervals |
+- Native `<select>` dropdowns are drawn by the OS: they cannot be captured or picked. Custom (HTML) selects work.
+- Menus closed by a JS timer: the screenshot is still right (taken before the freeze), but elements inside the menu cannot be picked once it is gone.
+- Cross-origin iframes: the freeze shield and hover lock cannot reach inside them.
+- Capture-phase listeners the page registered on `window` before the extension loaded still run before the shield.
+- `:hover` rules inside a web component's Shadow DOM are not copied by the hover lock.
 
 ---
 
@@ -216,7 +159,6 @@ The exported Markdown includes:
 - All data is stored **locally** on your machine (Chrome Storage API)
 - **No analytics**, no tracking, no external data transmission
 - Sensitive fields (password, token, secret, apiKey) are **automatically masked**
-- WebSocket/MCP connection is optional, localhost-only, and user-initiated
 - Network capture skips `chrome-extension://` URLs
 
 See [PRIVACY.md](PRIVACY.md) for full privacy policy.

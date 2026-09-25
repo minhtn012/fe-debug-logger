@@ -1,9 +1,13 @@
 // Network capture module - intercepts fetch and XMLHttpRequest
+// Hooks are installed on the first start() and stay installed; start/stop only
+// toggle whether entries are forwarded to postLog.
 // eslint-disable-next-line no-unused-vars
 function createNetworkCapture(postLog) {
   let origFetch, origXhrOpen, origXhrSend, origXhrSetHeader;
   const SLOW_THRESHOLD = 3000;
   let logAll = false;
+  let recordingActive = false;
+  let hooksInstalled = false;
 
   function truncateBody(body) {
     if (!body) return '';
@@ -66,8 +70,10 @@ function createNetworkCapture(postLog) {
     return parts.join(' \\\n  ');
   }
 
-  function start(config) {
-    logAll = config.network || config.logAllNetwork || false;
+  // Install fetch/XHR hooks exactly once
+  function installHooks() {
+    if (hooksInstalled) return;
+    hooksInstalled = true;
 
     // --- Fetch interceptor ---
     origFetch = window.fetch;
@@ -84,10 +90,10 @@ function createNetworkCapture(postLog) {
       try {
         const response = await origFetch.apply(this, arguments);
         const duration = Math.round(performance.now() - startTime);
-        const shouldLog = logAll || response.status >= 400 || duration > SLOW_THRESHOLD;
+        const shouldLog = recordingActive && (logAll || response.status >= 400 || duration > SLOW_THRESHOLD);
 
+        let resBody = '';
         if (shouldLog) {
-          let resBody = '';
           try {
             const clone = response.clone();
             // Read only first 1KB to prevent OOM on large responses
@@ -100,9 +106,10 @@ function createNetworkCapture(postLog) {
               resBody = truncateBody(await clone.text());
             }
           } catch (_) {}
+        }
 
+        if (shouldLog) {
           const resHeaders = extractHeaders(response.headers);
-
           postLog('network', {
             timestamp: new Date().toISOString(),
             type: 'fetch',
@@ -120,21 +127,24 @@ function createNetworkCapture(postLog) {
         }
         return response;
       } catch (error) {
-        postLog('network', {
-          timestamp: new Date().toISOString(),
-          type: 'fetch',
-          method,
-          url,
-          status: 0,
-          statusText: 'Network Error',
-          duration: Math.round(performance.now() - startTime),
-          requestHeaders: reqHeaders,
-          responseHeaders: {},
-          requestBody: reqBody,
-          responseBody: '',
-          error: error.message,
-          curl: buildCurl(method, url, reqHeaders, reqBody),
-        });
+        const duration = Math.round(performance.now() - startTime);
+        if (recordingActive) {
+          postLog('network', {
+            timestamp: new Date().toISOString(),
+            type: 'fetch',
+            method,
+            url,
+            status: 0,
+            statusText: 'Network Error',
+            duration,
+            requestHeaders: reqHeaders,
+            responseHeaders: {},
+            requestBody: reqBody,
+            responseBody: '',
+            error: error.message,
+            curl: buildCurl(method, url, reqHeaders, reqBody),
+          });
+        }
         throw error;
       }
     };
@@ -165,9 +175,17 @@ function createNetworkCapture(postLog) {
         this._feDebug.startTime = performance.now();
         this._feDebug.requestBody = truncateBody(body);
 
+        // once: a reused XHR object re-enters send() and would otherwise stack
+        // loadend listeners, duplicating recorded logs
         this.addEventListener('loadend', () => {
           const duration = Math.round(performance.now() - this._feDebug.startTime);
-          const shouldLog = logAll || this.status >= 400 || duration > SLOW_THRESHOLD;
+          const shouldLog = recordingActive && (logAll || this.status >= 400 || duration > SLOW_THRESHOLD);
+
+          let resBody = '';
+          if (shouldLog) {
+            // responseText throws for non-text responseType — degrade to empty
+            try { resBody = truncateBody(this.responseText); } catch (_) {}
+          }
 
           if (shouldLog) {
             const resHeaders = parseXhrResponseHeaders(this.getAllResponseHeaders());
@@ -182,21 +200,25 @@ function createNetworkCapture(postLog) {
               requestHeaders: this._feDebug.requestHeaders,
               responseHeaders: resHeaders,
               requestBody: this._feDebug.requestBody,
-              responseBody: truncateBody(this.responseText),
+              responseBody: resBody,
               curl: buildCurl(this._feDebug.method, this._feDebug.url, this._feDebug.requestHeaders, this._feDebug.requestBody),
             });
           }
-        });
+        }, { once: true });
       }
       return origXhrSend.apply(this, arguments);
     };
   }
 
+  function start(config) {
+    logAll = config.network || config.logAllNetwork || false;
+    installHooks();
+    recordingActive = true;
+  }
+
+  // Hooks stay installed: unwrapping could break a wrapper the page added on top
   function stop() {
-    if (origFetch) window.fetch = origFetch;
-    if (origXhrOpen) XMLHttpRequest.prototype.open = origXhrOpen;
-    if (origXhrSend) XMLHttpRequest.prototype.send = origXhrSend;
-    if (origXhrSetHeader) XMLHttpRequest.prototype.setRequestHeader = origXhrSetHeader;
+    recordingActive = false;
   }
 
   return { start, stop };

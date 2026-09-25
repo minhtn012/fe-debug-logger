@@ -1,11 +1,21 @@
-// Annotation capture — inspect mode element picker + overlay form via Shadow DOM
+// Annotation capture — inspect mode element picker + overlay form via Shadow DOM.
+// Two modes share the picker/overlay: 'annotate' (bug notes, default) and
+// 'feedback' (note + kind for a feedback session), which hands its payload to
+// opts.onSave.
+// Page events reach the picker through pageFreeze's shield, never through
+// listeners of this module, so the page stays frozen while picking.
 // eslint-disable-next-line no-unused-vars
-function createAnnotationCapture(postLog) {
+function createAnnotationCapture(postLog, pageFreeze) {
   const CONTAINER_ID = '__fe_debug_annotation_root__';
   let active = false;
+  let mode = 'annotate';
+  let modeOpts = null; // feedback: { onSave, onStop, ownHosts }
   let shadowRoot = null;
   let container = null;
   let selectedElement = null;
+  // Rect at click time: the frozen screenshot shows the page at that moment, so
+  // crops use it even if the element moved or vanished before Save.
+  let clickRect = null;
   let highlightedElement = null;
   let formVisible = false;
   let annotationCount = 0;
@@ -29,7 +39,8 @@ function createAnnotationCapture(postLog) {
       if (current.id) {
         tag += `#${current.id}`;
       } else if (current.className && typeof current.className === 'string') {
-        const classes = current.className.trim().split(/\s+/).slice(0, 2);
+        // Skip the extension's own classes (page-freeze hover pin)
+        const classes = current.className.trim().split(/\s+/).filter((c) => c && !c.startsWith('__fe_')).slice(0, 2);
         if (classes.length) tag += '.' + classes.join('.');
       }
       parts.unshift(tag);
@@ -48,11 +59,15 @@ function createAnnotationCapture(postLog) {
       <style>${getOverlayCSS()}</style>
       <div class="annotation-form hidden" id="annotForm">
         <div class="form-header">
-          <span class="form-title">Annotation</span>
+          <span class="form-title" id="formTitle">Annotation</span>
           <button class="close-btn" id="cancelBtn">&times;</button>
         </div>
         <textarea id="noteInput" placeholder="Describe the issue..." rows="3"></textarea>
-        <div class="form-row">
+        <div class="form-row fb-only">
+          <label>Loại</label>
+          <select id="kindSelect"><option value="bug" selected>Bug</option><option value="suggestion">Góp ý</option></select>
+        </div>
+        <div class="form-row annot-only">
           <label>Severity</label>
           <select id="severitySelect">
             <option value="critical">Critical</option>
@@ -60,7 +75,7 @@ function createAnnotationCapture(postLog) {
             <option value="minor">Minor</option>
           </select>
         </div>
-        <div class="form-row">
+        <div class="form-row annot-only">
           <label>Tags</label>
           <div class="tags" id="tagContainer">
             <span class="tag active" data-tag="UI">UI</span>
@@ -69,7 +84,7 @@ function createAnnotationCapture(postLog) {
             <span class="tag" data-tag="Style">Style</span>
           </div>
         </div>
-        <div class="form-row options-row">
+        <div class="form-row options-row annot-only">
           <label><input type="checkbox" id="optScreenshot" checked> Screenshot</label>
           <label><input type="checkbox" id="optDomSnapshot" checked> DOM Snapshot</label>
         </div>
@@ -92,6 +107,8 @@ function createAnnotationCapture(postLog) {
         z-index: 999999; pointer-events: auto; line-height: 1.4;
       }
       .annotation-form.hidden { display: none; }
+      .annotation-form.feedback-mode .annot-only, .fb-only { display: none; }
+      .annotation-form.feedback-mode .fb-only { display: block; }
       .form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
       .form-title { font-weight: 600; font-size: 14px; }
       .close-btn { background: none; border: none; font-size: 18px; cursor: pointer; color: #666; padding: 0 4px; }
@@ -154,6 +171,8 @@ function createAnnotationCapture(postLog) {
     e.stopImmediatePropagation();
 
     selectedElement = e.target;
+    const r = selectedElement.getBoundingClientRect();
+    clickRect = { x: r.x, y: r.y, width: r.width, height: r.height };
     // Remove highlight
     if (highlightedElement) {
       highlightedElement.style.outline = highlightedElement.__feDebugOriginalOutline || '';
@@ -182,7 +201,9 @@ function createAnnotationCapture(postLog) {
 
     // Reset form
     shadowRoot.getElementById('noteInput').value = '';
+    shadowRoot.getElementById('noteInput').style.borderColor = '';
     shadowRoot.getElementById('severitySelect').value = 'major';
+    shadowRoot.getElementById('kindSelect').value = 'bug';
     shadowRoot.getElementById('noteInput').focus();
   }
 
@@ -191,6 +212,15 @@ function createAnnotationCapture(postLog) {
     const form = shadowRoot.getElementById('annotForm');
     form.classList.add('hidden');
     selectedElement = null;
+    clickRect = null;
+  }
+
+  // True when the picked element is gone or collapsed at save time — the crop
+  // still comes from the click-time rect, but the DOM snapshot may not match it.
+  function domChangedSinceClick(el) {
+    if (!el || !el.isConnected) return true;
+    const r = el.getBoundingClientRect();
+    return r.width === 0 && r.height === 0;
   }
 
   function getSelectedTags() {
@@ -199,7 +229,47 @@ function createAnnotationCapture(postLog) {
     return tags;
   }
 
+  function truncateText(str, maxLen) {
+    if (!str) return '';
+    const s = str.trim().replace(/\s+/g, ' ');
+    return s.length > maxLen ? s.substring(0, maxLen) + '...' : s;
+  }
+
+  // Feedback mode save: kind + note + padded crop rect; the coordinator adds the
+  // page URL and sends the item to background.
+  function saveFeedback() {
+    const noteEl = shadowRoot.getElementById('noteInput');
+    const note = noteEl.value.trim();
+    if (!note) {
+      noteEl.style.borderColor = '#dc2626';
+      return;
+    }
+    const el = selectedElement;
+    handOff({
+      kind: shadowRoot.getElementById('kindSelect').value,
+      note,
+      selector: getSelector(el),
+      elementText: truncateText(el.textContent, 100),
+      cropRect: paddedCropRect(clickRect),
+      dpr: window.devicePixelRatio || 1,
+      domChangedAfterFreeze: domChangedSinceClick(el),
+    });
+  }
+
+  // Close the form, then give the payload to opts.onSave after the overlay
+  // repaint (a live-capture fallback must not see the form). Inspect mode stays on.
+  function handOff(payload) {
+    const onSave = modeOpts && modeOpts.onSave;
+    closeForm();
+    if (!onSave) return;
+    setTimeout(() => {
+      try { onSave(payload); } catch (e) { console.error('__fe_debug_logger__', `${mode} save failed:`, e); }
+    }, 100);
+  }
+
   function saveAnnotation() {
+    if (mode === 'feedback') return saveFeedback();
+
     const note = shadowRoot.getElementById('noteInput').value.trim();
     if (!note) {
       shadowRoot.getElementById('noteInput').style.borderColor = '#dc2626';
@@ -230,9 +300,10 @@ function createAnnotationCapture(postLog) {
       domSnapshot,
       timestamp: new Date().toISOString(),
     };
+    if (domChangedSinceClick(selectedElement)) entry.domChangedAfterFreeze = true;
 
-    // Capture element ref before closing form
-    const screenshotTarget = selectedElement;
+    // Capture the click-time rect before closing the form resets it
+    const screenshotRect = clickRect;
 
     postLog('annotation', entry);
 
@@ -247,24 +318,26 @@ function createAnnotationCapture(postLog) {
     closeForm();
 
     // Delay screenshot to allow overlay removal + repaint
-    if (wantScreenshot && screenshotTarget) {
-      setTimeout(() => requestScreenshot(screenshotTarget, annotationId), 100);
+    if (wantScreenshot && screenshotRect) {
+      setTimeout(() => requestScreenshot(screenshotRect, annotationId), 100);
     }
     // Stay in inspect mode for next annotation
   }
 
-  function requestScreenshot(element, annotationId) {
-    const rect = element.getBoundingClientRect();
-    // Proportional padding: 30%, min 20px, max 100px
+  // Proportional padding: 30%, min 20px, max 100px, clamped to the viewport
+  function paddedCropRect(rect) {
     const padX = Math.min(100, Math.max(20, rect.width * 0.3));
     const padY = Math.min(100, Math.max(20, rect.height * 0.3));
-    const cropRect = {
+    return {
       x: Math.max(0, rect.x - padX),
       y: Math.max(0, rect.y - padY),
       width: Math.min(window.innerWidth - Math.max(0, rect.x - padX), rect.width + padX * 2),
       height: Math.min(window.innerHeight - Math.max(0, rect.y - padY), rect.height + padY * 2),
     };
+  }
 
+  function requestScreenshot(rect, annotationId) {
+    const cropRect = paddedCropRect(rect);
     window.postMessage({
       __source: 'fe-debug-logger',
       version: 1,
@@ -289,29 +362,42 @@ function createAnnotationCapture(postLog) {
     }
   }
 
-  // --- Form event bindings ---
-  function bindFormEvents() {
-    shadowRoot.getElementById('saveBtn').addEventListener('click', saveAnnotation);
-    shadowRoot.getElementById('cancelBtn').addEventListener('click', closeForm);
-    shadowRoot.getElementById('cancelBtn2').addEventListener('click', closeForm);
-
-    // Tag toggle
-    shadowRoot.getElementById('tagContainer').addEventListener('click', (e) => {
-      if (e.target.classList.contains('tag')) {
-        e.target.classList.toggle('active');
-      }
-    });
+  // --- Form events ---
+  // The freeze shield stops every event inside the overlay at window, so page
+  // listeners never see clicks on the form (a menu open behind it stays open).
+  // The form's own nodes get no listener calls either: the shield hands the
+  // events here. Default actions (focus, typing, select, checkbox) still run.
+  function onOwnEvent(e) {
+    const path = e.composedPath();
+    if (!container || !path.includes(container)) return false;
+    const target = path[0];
+    if (e.type === 'click' && target.id === 'saveBtn') saveAnnotation();
+    else if (e.type === 'click' && (target.id === 'cancelBtn' || target.id === 'cancelBtn2')) closeForm();
+    else if (e.type === 'click' && target.classList && target.classList.contains('tag')) target.classList.toggle('active');
+    else if (e.type === 'keydown' && e.key === 'Escape') {
+      e.preventDefault();
+      closeForm();
+    }
+    return true;
   }
 
   // --- Public API ---
-  function start() {
+  function start(startMode, opts) {
     if (active) return;
     active = true;
+    mode = startMode === 'feedback' ? 'feedback' : 'annotate';
+    modeOpts = mode === 'annotate' ? null : (opts || {});
     injectOverlay();
-    bindFormEvents();
-    document.addEventListener('mousemove', onMouseMove, true);
-    document.addEventListener('click', onMouseClick, true);
-    document.addEventListener('keydown', onKeyDown, true);
+    const form = shadowRoot.getElementById('annotForm');
+    if (mode === 'feedback') {
+      form.classList.add('feedback-mode');
+      shadowRoot.getElementById('formTitle').textContent = 'Feedback';
+      shadowRoot.getElementById('noteInput').placeholder = 'Mô tả bug hoặc góp ý...';
+      shadowRoot.getElementById('saveBtn').textContent = 'Lưu';
+      shadowRoot.getElementById('cancelBtn2').textContent = 'Huỷ';
+    }
+    const ownHosts = [container, ...((modeOpts && modeOpts.ownHosts) || [])];
+    pageFreeze.freeze({ onMove: onMouseMove, onClick: onMouseClick, onKey: onKeyDown, onOwn: onOwnEvent }, ownHosts);
     document.body.style.cursor = 'crosshair';
   }
 
@@ -319,9 +405,7 @@ function createAnnotationCapture(postLog) {
     if (!active) return;
     active = false;
     formVisible = false;
-    document.removeEventListener('mousemove', onMouseMove, true);
-    document.removeEventListener('click', onMouseClick, true);
-    document.removeEventListener('keydown', onKeyDown, true);
+    pageFreeze.unfreeze();
     document.body.style.cursor = '';
     // Clean up highlight
     if (highlightedElement) {
@@ -336,6 +420,10 @@ function createAnnotationCapture(postLog) {
     container = null;
     shadowRoot = null;
     selectedElement = null;
+    clickRect = null;
+    const onStop = modeOpts && modeOpts.onStop;
+    mode = 'annotate';
+    modeOpts = null;
 
     // Notify stop
     window.postMessage({
@@ -343,6 +431,9 @@ function createAnnotationCapture(postLog) {
       version: 1,
       type: 'ANNOTATE_STOPPED',
     }, '*');
+    if (onStop) {
+      try { onStop(); } catch (e) { console.error('__fe_debug_logger__', 'Picker stop callback failed:', e); }
+    }
   }
 
   function isActive() { return active; }

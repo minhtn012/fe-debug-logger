@@ -1,11 +1,11 @@
 // Markdown formatter - converts captured log entries into structured Markdown
 // eslint-disable-next-line no-unused-vars
 function formatMarkdown(logData) {
-  const { meta, entries, screenshotMap } = logData;
+  const { meta, entries, screenshotMap, screenshots = [] } = logData;
   const sections = [];
 
   sections.push(formatHeader(meta));
-  sections.push(formatMetadata(meta, entries));
+  sections.push(formatMetadata(meta, entries, screenshots));
 
   const annotations = entries.filter((e) => e.category === 'annotation');
   const actions = entries.filter((e) => e.category === 'action');
@@ -15,6 +15,9 @@ function formatMarkdown(logData) {
 
   const annotationSection = formatAnnotations(annotations, entries, screenshotMap || {});
   if (annotationSection) sections.push(annotationSection);
+
+  const screenshotSection = formatScreenshots(screenshots);
+  if (screenshotSection) sections.push(screenshotSection);
 
   const actionSection = formatUserActions(actions);
   if (actionSection) sections.push(actionSection);
@@ -54,16 +57,16 @@ function formatHeader(meta) {
 | Viewport | ${viewport} |`;
 }
 
-function formatMetadata(meta, entries) {
+function formatMetadata(meta, entries, screenshots) {
   const annotations = entries.filter((e) => e.category === 'annotation');
   const consoleErrors = entries.filter((e) => e.category === 'console');
   const networkIssues = entries.filter((e) => e.category === 'network');
-  const screenshotCount = annotations.filter((e) => e.wantScreenshot).length;
+  const screenshotCount = annotations.filter((e) => e.wantScreenshot).length + screenshots.length;
 
   return `## Report Metadata
 | Field | Value |
 |-------|-------|
-| Tool | FE Debug Logger v0.2.0 |
+| Tool | FE Debug Logger v${meta?.toolVersion || '?'} |
 | Report Type | Frontend Bug Report |
 | Annotations | ${annotations.length} |
 | Screenshots | ${screenshotCount} |
@@ -84,6 +87,9 @@ function formatAnnotations(annotations, allEntries, screenshotMap) {
     md += `**Element:** \`${escapeCell(a.selector || 'unknown')}\`\n`;
     md += `**Note:** ${escapeCell(a.note || '')}\n`;
     md += `**Time:** ${formatTime(a.timestamp)}\n`;
+    if (a.domChangedAfterFreeze) {
+      md += `_Element was removed or hidden before save; screenshot shows the page at click time, DOM snapshot may differ._\n`;
+    }
 
     // Temporal linking: find nearby events ±5 seconds
     const nearbyContext = findNearbyEvents(allEntries, a.timestamp, 5000);
@@ -103,6 +109,21 @@ function formatAnnotations(annotations, allEntries, screenshotMap) {
     }
   });
 
+  return md;
+}
+
+// Region and full-page shots taken from the popup, with the note typed after each.
+// filename is null for Copy, which carries no images.
+function formatScreenshots(screenshots) {
+  if (!screenshots.length) return null;
+
+  let md = `## Screenshots (${screenshots.length})\n`;
+  screenshots.forEach((s, i) => {
+    const label = s.mode === 'full' ? 'Full page' : 'Region';
+    md += `\n### #${i + 1} ${label}${s.timestamp ? ` - at ${formatTime(s.timestamp)}` : ''}\n`;
+    if (s.note) md += `**Note:** ${escapeCell(s.note)}\n`;
+    md += s.filename ? `\n![screenshot](screenshots/${s.filename})\n` : `_Image only in the ZIP export._\n`;
+  });
   return md;
 }
 

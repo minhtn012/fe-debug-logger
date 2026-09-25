@@ -33,7 +33,7 @@
     userAction: createUserActionCapture(postLog),
     network: createNetworkCapture(postLog),
     componentState: createComponentStateCapture(postLog),
-    annotation: createAnnotationCapture(postLog),
+    annotation: createAnnotationCapture(postLog, createPageFreeze()),
     screenshot: createScreenshotCapture(postMessage),
   };
 
@@ -57,7 +57,8 @@
 
     try { if (cfg.console) captures.console.start(cfg); } catch (e) { console.error('__fe_debug_logger__', 'Console capture failed:', e); }
     try { if (cfg.userActions) captures.userAction.start(cfg); } catch (e) { console.error('__fe_debug_logger__', 'User action capture failed:', e); }
-    try { if (cfg.network) captures.network.start(cfg); } catch (e) { console.error('__fe_debug_logger__', 'Network capture failed:', e); }
+    // networkIssuesOnly (feedback sessions): only failed or slow requests are logged
+    try { if (cfg.network || cfg.networkIssuesOnly) captures.network.start({ ...cfg, network: !!cfg.network }); } catch (e) { console.error('__fe_debug_logger__', 'Network capture failed:', e); }
     try { if (cfg.componentState) captures.componentState.start(); } catch (e) { console.error('__fe_debug_logger__', 'Component state capture failed:', e); }
   }
 
@@ -72,12 +73,17 @@
     try { captures.screenshot.stop(); } catch (_) {}
   }
 
+  const feedback = createFeedbackController({
+    annotation: captures.annotation, createFab: createFabWidget, startCapture, stopCapture,
+  });
+
   // Listen for commands from ISOLATED world bridge
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const msg = event.data;
     if (!msg || msg.__source !== SIGNATURE) return;
 
+    if (feedback.handle(msg)) return;
     if (msg.type === 'START_CAPTURE') {
       startCapture(msg.config || {});
     } else if (msg.type === 'STOP_CAPTURE') {
@@ -88,6 +94,8 @@
       try { captures.annotation.stop(); } catch (_) {}
     } else if (msg.type === 'START_REGION_SELECT') {
       try { captures.screenshot.startRegionSelect(); } catch (e) { console.error('__fe_debug_logger__', 'Region select failed:', e); }
+    } else if (msg.type === 'SCREENSHOT_TAKEN') {
+      try { captures.screenshot.promptNote(msg.screenshotId, msg.mode); } catch (e) { console.error('__fe_debug_logger__', 'Screenshot note failed:', e); }
     }
   });
 })();

@@ -396,6 +396,46 @@ Browser downloads .md file
 | PROCESS_EXPORT | BG → Offscreen | Format logs and generate data URL |
 | EXPORT_READY | Offscreen → BG | Return formatted Markdown + filename |
 
+## Feedback Mode
+
+Feedback mode collects named sessions of UI feedback per origin, independent of Record. A site with a live feedback session refuses Record and the reverse.
+
+### Flow
+
+```
+popup "Feedback" / toolbar icon (FE Feedback build)
+  → TOGGLE_FEEDBACK_SITE → fb_sites → FEEDBACK_STATE to every tab of the origin
+fab "Góp ý" (MAIN world, fab-widget.js) → START_FEEDBACK_SESSION → fb_session_<id>, fb_active[origin]
+fab "Chọn element" → REQUEST_FEEDBACK_PICKER → beginPicker() (freeze-shot.js):
+  captureVisibleTab into frozen_shot_<tabId>, then START_FEEDBACK_PICKER to the tab
+  → page-freeze.js freezes the page, annotation-capture.js runs in 'feedback' mode
+save → FEEDBACK_ITEM → fb_item_<id>_<seq>; offscreen crops the frozen shot → fb_shot_<id>_<seq>
+LOG_ENTRY / PAGE_META from a live origin → routeFeedbackLog() → fb_log_<id>_<seq> (console errors, network issues)
+fab "Xong" → FINISH_FEEDBACK_SESSION → fbOpenReview(id) → review.html?session=<id>
+```
+
+The review page (`review.html`) reads storage directly through `createFeedbackStore()`, and sends every write to the background (`FEEDBACK_UPDATE_ITEM`, `FEEDBACK_DELETE_ITEM`, `FEEDBACK_DELETE_SESSION`). The background accepts these only from extension pages. Export (Copy MD, Export MD, Export ZIP) runs in the review page itself with `formatter/feedback-formatter.js`, JSZip and `chrome.downloads`, not through offscreen. The ZIP is named `fe-debug-feedback-<host>-<slug>-<timestamp>.zip`.
+
+Ways into the review page (`feedback/feedback-review-entry.js`): the fab's Xong button, the toolbar icon's context menu "Xem feedback đã lưu" (both builds), and the popup's "Xem feedback" button (full build). All of them focus an open review tab instead of opening a second one.
+
+### Storage (`chrome.storage.local`)
+
+| Key | Content |
+|-----|---------|
+| `fb_sites` | Origins with feedback enabled |
+| `fb_active` | `{ origin: sessionId }` of live sessions |
+| `fb_index` | Session ids, oldest first |
+| `fb_session_<id>` | Name, origin, start/finish time, item keys, pages, browser meta |
+| `fb_item_<id>_<seq>` | Kind (bug/suggestion), note, selector, element text, URL |
+| `fb_shot_<id>_<seq>` | Cropped PNG data URL of the item |
+| `fb_log_<id>_<seq>` | Console error or network issue entry |
+
+All writes go through one promise queue in `feedback/feedback-store.js`. Limits: 50 items and 500 log entries per session.
+
+### Builds
+
+`build.sh` packs `fe-debug-logger-v<ver>.zip` (full, `manifest.json`) and `fe-feedback-v<ver>.zip` (`manifest.feedback.json`: no `default_popup`, no `commands`). Without a popup, `chrome.action.onClicked` fires and toggles the current site. Without `commands`, the Annotate/Ask hotkeys never fire. The code is the same for both builds.
+
 ## Concurrency & State Management
 
 ### Recording State Machine

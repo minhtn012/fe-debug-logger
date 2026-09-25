@@ -236,6 +236,23 @@ extension-debug/
 
 **Filename Format**: `fe-debug-log-<ISO-timestamp>.md`
 
+### Feedback Mode (`feedback/`, `review*`, `formatter/feedback-formatter.js`)
+
+| File | Role |
+|------|------|
+| `capture/page-freeze.js` | Freezes the page while any picker runs (animations, timers, hover state) |
+| `freeze-shot.js` | `beginPicker()`: takes the frozen screenshot before a picker starts; crops come from it |
+| `feedback/feedback-store.js` | `createFeedbackStore()`: sessions, items, shots and logs in `storage.local` under `fb_*` keys |
+| `feedback/feedback-background.js` | Feedback message handlers, crop via offscreen, routing of logs from live origins |
+| `feedback/feedback-review-entry.js` | `fbOpenReview()`, toolbar icon click (site toggle) and context menu |
+| `feedback/fab-widget.js` | Floating button (Shadow DOM, MAIN world) |
+| `feedback/feedback-controller.js` | MAIN-world glue between `FEEDBACK_STATE`, the fab, the picker and capture |
+| `formatter/feedback-formatter.js` | Session → Markdown, screenshot names, export file name |
+| `review.html`, `review.js`, `review-render.js`, `review-export.js`, `review.css` | Review page: list, edit, delete, export |
+| `manifest.feedback.json` | Manifest of the FE Feedback build (no popup, no hotkeys) |
+
+See `docs/system-architecture.md` → Feedback Mode for the flow and storage layout.
+
 ## Message Types
 
 ### Content Script → Background

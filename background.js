@@ -1,4 +1,4 @@
-importScripts('websocket-client.js');
+importScripts('freeze-shot.js', 'feedback/feedback-store.js', 'feedback/feedback-background.js', 'feedback/feedback-review-entry.js');
 
 let entryCounter = 0;
 let annotationCounter = 0;
@@ -6,68 +6,31 @@ let screenshotCounter = 0;
 const MAX_SCREENSHOTS = 5;
 const MAX_ENTRIES = 2000; // Cap log entries to stay well under chrome.storage.local quota (~10MB)
 let entryLimitWarned = false;
-const STREAM_ALARM = 'stream-entries';
-let lastStreamedSeq = -1;
 
 // Restore counters from storage on SW wake
-chrome.storage.session.get(['recording', 'entryCounter', 'annotationCounter', 'screenshotCounter', 'lastStreamedSeq'], (data) => {
+chrome.storage.session.get(['recording', 'entryCounter', 'annotationCounter', 'screenshotCounter'], (data) => {
   entryCounter = data.entryCounter || 0;
   annotationCounter = data.annotationCounter || 0;
   screenshotCounter = data.screenshotCounter || 0;
-  lastStreamedSeq = data.lastStreamedSeq ?? -1;
   entryLimitWarned = entryCounter > MAX_ENTRIES; // already capped+warned if past the limit
 });
 
-// WebSocket client for MCP server communication
-const wsClient = createWebSocketClient(handleWsCommand);
-// Try connecting on SW start — silent fail if MCP server not running
-wsClient.connect();
+// Versions with the Ask feature stored question packages under question_* / qshot_*;
+// nothing reads them any more, so drop them on install or update.
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.get(null).then((all) => {
+    const stale = Object.keys(all).filter((k) => k.startsWith('question_') || k.startsWith('qshot_'));
+    if (stale.length) chrome.storage.local.remove(stale);
+  }).catch(() => {});
+});
 
-function handleWsCommand(msg) {
-  const reqId = msg._requestId; // Echo back for response routing
-
-  if (msg.type === 'START_RECORDING') {
-    const config = msg.config || { console: true, userActions: true, network: true, componentState: true };
-    startRecording(config, (resp) => {
-      wsClient.send({ type: 'RECORDING_STARTED', _requestId: reqId, ...resp });
-    });
-    return;
-  }
-
-  if (msg.type === 'STOP_RECORDING') {
-    stopRecording((resp) => {
-      wsClient.send({ type: 'RECORDING_STOPPED', _requestId: reqId, entryCount: resp?.entryCount || entryCounter });
-    });
-    return;
-  }
-
-  if (msg.type === 'GET_STATUS') {
-    chrome.storage.session.get(['recording', 'config'], (data) => {
-      wsClient.send({
-        type: 'STATUS',
-        _requestId: reqId,
-        recording: !!data.recording,
-        entryCount: entryCounter,
-        annotationCount: annotationCounter,
-      });
-    });
-    return;
-  }
-
-  if (msg.type === 'GET_LOG') {
-    gatherLogData().then((logData) => {
-      wsClient.send({ type: 'LOG_DATA', _requestId: reqId, ...logData });
-    });
-    return;
-  }
-}
-
-// Gather log entries and screenshots for WS/copy
+// Gather log entries and screenshots for export/copy
 async function gatherLogData() {
   const all = await chrome.storage.local.get(null);
   const logKeys = Object.keys(all).filter((k) => k.startsWith('log_')).sort();
   const entries = logKeys.map((k) => all[k]);
-  const sessionMeta = all.sessionMeta || {};
+  // The offscreen document that formats the log cannot read the manifest
+  const sessionMeta = { ...(all.sessionMeta || {}), toolVersion: chrome.runtime.getManifest().version };
 
   const screenshotKeys = Object.keys(all).filter((k) => k.startsWith('screenshot_')).sort();
   const screenshots = screenshotKeys.map((k) => ({ key: k, ...all[k] }));
@@ -77,6 +40,7 @@ async function gatherLogData() {
   let annotationIdx = 0;
   let fullIdx = 0;
   let regionIdx = 0;
+  const shotList = [];
 
   for (const ss of screenshots) {
     let filename;
@@ -92,6 +56,7 @@ async function gatherLogData() {
     }
     screenshotFiles.push({ filename, dataUrl: ss.dataUrl });
     if (ss.annotationId) screenshotMap[ss.annotationId] = filename;
+    else shotList.push({ filename, mode: ss.mode, note: ss.note || '', timestamp: ss.timestamp || null });
   }
 
   return {
@@ -100,30 +65,25 @@ async function gatherLogData() {
     screenshotMap,
     screenshotKeys,
     screenshotFiles,
-    screenshots: screenshotFiles.map((sf) => ({
-      name: sf.filename,
-      base64: sf.dataUrl ? sf.dataUrl.split(',')[1] : '',
-    })),
+    screenshots: shotList,
   };
 }
 
-// Stream alarm: batch-send entries to MCP server
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === STREAM_ALARM) {
-    flushStreamEntries();
-  }
-});
-
-// Keyboard shortcut: Ctrl+Shift+A toggle annotate
-chrome.commands.onCommand.addListener((command) => {
+// Keyboard shortcut (Alt+Shift+A annotate). chrome.commands is undefined in a
+// build whose manifest declares no commands (FE Feedback); a throw here would stop
+// every listener registered below.
+chrome.commands?.onCommand.addListener((command) => {
   if (command === 'toggle-annotate') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: 'START_ANNOTATE' }).catch(() => {});
+      if (tabs[0]) beginPicker(tabs[0].id, { type: 'START_ANNOTATE' });
     });
   }
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const feedbackResult = handleFeedbackMessage(msg, sender, sendResponse);
+  if (feedbackResult !== undefined) return feedbackResult;
+
   if (msg.type === 'GET_STATUS') {
     chrome.storage.session.get(['recording', 'config', 'recordingWindowId'], (data) => {
       // Scope auto-resume to the recording window: a content script in another window
@@ -137,6 +97,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         recording: !!data.recording && inScope,
         entryCount: entryCounter,
         annotationCount: annotationCounter,
+        screenshotCount: screenshotCounter,
         config: data.config || null,
       });
     });
@@ -153,32 +114,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // Tabs on an origin with a live feedback session log into that session instead
   if (msg.type === 'LOG_ENTRY') {
-    const { __source, version, type, data, ...rest } = msg;
-    const entryData = data || rest;
-
-    // Dedup: if entry has dedupKey and repeatCount > 1, try updating existing
-    if (entryData.dedupKey && entryData.repeatCount > 1) {
-      const dedupStorageKey = `dedup_${entryData.dedupKey}`;
-      chrome.storage.session.get([dedupStorageKey], (stored) => {
-        const existingKey = stored[dedupStorageKey];
-        if (existingKey) {
-          // Update existing entry in-place with new count + timestamp
-          chrome.storage.local.get([existingKey], (items) => {
-            if (items[existingKey]) {
-              const updated = { ...items[existingKey], repeatCount: entryData.repeatCount, lastTimestamp: entryData.timestamp };
-              chrome.storage.local.set({ [existingKey]: updated });
-            }
-          });
-        } else {
-          // First occurrence with repeatCount > 1: store as new entry
-          storeNewEntry(entryData);
-        }
-      });
-      return false;
-    }
-
-    storeNewEntry(entryData);
+    routeFeedbackLog(msg, sender)
+      .then((handled) => { if (!handled) recordLogEntry(msg); })
+      .catch((err) => console.error('__fe_debug_logger__', 'Log routing failed:', err));
     return false;
   }
 
@@ -216,12 +156,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         entryCounter = 0;
         annotationCounter = 0;
         screenshotCounter = 0;
-        lastStreamedSeq = -1;
         entryLimitWarned = false;
         // Clear dedup keys from session storage
         chrome.storage.session.get(null, (sessionData) => {
           const dedupKeys = Object.keys(sessionData).filter((k) => k.startsWith('dedup_'));
-          const clearObj = { entryCounter: 0, annotationCounter: 0, screenshotCounter: 0, lastStreamedSeq: -1 };
+          const clearObj = { entryCounter: 0, annotationCounter: 0, screenshotCounter: 0 };
           if (dedupKeys.length > 0) chrome.storage.session.remove(dedupKeys);
           chrome.storage.session.set(clearObj);
           sendResponse({ ok: true });
@@ -255,45 +194,55 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Handle cropped screenshot from offscreen
   if (msg.type === 'SCREENSHOT_CROPPED') {
-    chrome.storage.local.set({
-      [msg.screenshotId]: { dataUrl: msg.croppedDataUrl, annotationId: msg.annotationId, mode: msg.mode || 'element' },
+    storeScreenshot(msg.screenshotId, {
+      dataUrl: msg.croppedDataUrl, annotationId: msg.annotationId, mode: msg.mode || 'element',
+    }, msg.tabId);
+    return false;
+  }
+
+  // Note typed into the page's prompt after a region or full-page shot was stored
+  if (msg.type === 'SCREENSHOT_NOTE') {
+    const key = msg.screenshotId;
+    const note = typeof msg.note === 'string' ? msg.note.trim().slice(0, 2000) : '';
+    if (typeof key !== 'string' || !key.startsWith('screenshot_') || !note) return false;
+    chrome.storage.local.get([key], (items) => {
+      if (items[key]) chrome.storage.local.set({ [key]: { ...items[key], note } });
     });
-    screenshotCounter++;
-    chrome.storage.session.set({ screenshotCounter });
-    // Stream screenshot to MCP server
-    streamScreenshot(msg.croppedDataUrl, msg.annotationId, msg.mode || 'element');
     return false;
   }
 
   if (msg.type === 'PAGE_META') {
-    chrome.storage.local.get(['sessionMeta'], (data) => {
-      const meta = data.sessionMeta || {};
-      // First url wins: keep the primary/active-tab url. With multi-tab capture
-      // PAGE_META arrives from every tab — without this guard a background tab would
-      // clobber the session url. userAgent/viewport carry no per-tab meaning worth
-      // pinning, so let the latest reporter fill them.
-      if (!meta.url && msg.url) meta.url = msg.url;
-      meta.userAgent = msg.userAgent || meta.userAgent || '';
-      meta.viewport = msg.viewport || meta.viewport || '';
-      chrome.storage.local.set({ sessionMeta: meta });
-    });
+    routeFeedbackLog(msg, sender)
+      .then((handled) => { if (!handled) recordPageMeta(msg); })
+      .catch((err) => console.error('__fe_debug_logger__', 'Page meta routing failed:', err));
     return false;
   }
 
   // Popup-triggered actions
   if (msg.type === 'START_ANNOTATE') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: 'START_ANNOTATE' }).catch(() => {});
+      if (tabs[0]) beginPicker(tabs[0].id, { type: 'START_ANNOTATE' });
     });
     return false;
   }
 
-  if (msg.type === 'STOP_ANNOTATE' || msg.type === 'ANNOTATE_STOPPED') {
+  if (msg.type === 'ANNOTATE_STOPPED') {
+    clearFrozenShot(sender.tab?.id);
+    return false;
+  }
+
+  if (msg.type === 'STOP_ANNOTATE') {
     return false;
   }
 
   if (msg.type === 'CAPTURE_FULL_PAGE') {
-    handleScreenshot({ mode: 'full' }, null);
+    if (screenshotCounter >= MAX_SCREENSHOTS) {
+      console.warn('__fe_debug_logger__', `Screenshot limit reached (${MAX_SCREENSHOTS})`);
+      return false;
+    }
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+      handleScreenshot({ mode: 'full' }, tabs[0]?.id ?? null);
+    });
     return false;
   }
 
@@ -305,62 +254,42 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
-// Buffer new entries in-memory for streaming (avoids reading all storage each flush)
-let streamBuffer = [];
-
-// Stream: batch-send buffered entries to MCP server via WS
-function flushStreamEntries() {
-  if (!wsClient.isConnected() || streamBuffer.length === 0) return;
-  // Get domain from session meta for file naming
-  chrome.storage.local.get(['sessionMeta'], (data) => {
-    const batch = streamBuffer.splice(0);
-    wsClient.send({
-      type: 'STREAM_ENTRIES',
-      entries: batch,
-      domain: data.sessionMeta?.url || 'unknown',
+// Record log path. Dedup: an entry with dedupKey and repeatCount > 1 updates the
+// stored first occurrence in place instead of adding a new entry.
+function recordLogEntry(msg) {
+  const { __source, version, type, data, ...rest } = msg;
+  const entryData = data || rest;
+  if (!entryData.dedupKey || !(entryData.repeatCount > 1)) {
+    storeNewEntry(entryData);
+    return;
+  }
+  const dedupStorageKey = `dedup_${entryData.dedupKey}`;
+  chrome.storage.session.get([dedupStorageKey], (stored) => {
+    const existingKey = stored[dedupStorageKey];
+    if (!existingKey) {
+      storeNewEntry(entryData); // first occurrence with repeatCount > 1
+      return;
+    }
+    chrome.storage.local.get([existingKey], (items) => {
+      if (items[existingKey]) {
+        const updated = { ...items[existingKey], repeatCount: entryData.repeatCount, lastTimestamp: entryData.timestamp };
+        chrome.storage.local.set({ [existingKey]: updated });
+      }
     });
-    lastStreamedSeq = batch[batch.length - 1]._seq;
-    chrome.storage.session.set({ lastStreamedSeq });
   });
 }
 
-function startStreaming() {
-  lastStreamedSeq = -1;
-  streamBuffer = [];
-  streamScreenshotCounters = { annotation: 0, full: 0, region: 0 };
-  chrome.storage.session.set({ lastStreamedSeq: -1 });
-  // Chrome alarms min ~30s; use periodInMinutes for reliable SW wake
-  chrome.alarms.create(STREAM_ALARM, { periodInMinutes: 0.1 }); // ~6s
-}
-
-function stopStreaming() {
-  chrome.alarms.clear(STREAM_ALARM);
-  // Final flush before stopping
-  flushStreamEntries();
-}
-
-// Stream a screenshot to MCP server for live fe-debug/ folder
-let streamScreenshotCounters = { annotation: 0, full: 0, region: 0 };
-
-function streamScreenshot(dataUrl, annotationId, mode) {
-  if (!wsClient.isConnected() || !dataUrl) return;
-
-  let filename;
-  if (mode === 'full') {
-    streamScreenshotCounters.full++;
-    filename = `full-page-${String(streamScreenshotCounters.full).padStart(3, '0')}.png`;
-  } else if (mode === 'region') {
-    streamScreenshotCounters.region++;
-    filename = `region-${String(streamScreenshotCounters.region).padStart(3, '0')}.png`;
-  } else {
-    streamScreenshotCounters.annotation++;
-    filename = `annotation-${String(streamScreenshotCounters.annotation).padStart(3, '0')}.png`;
-  }
-
-  const base64 = dataUrl.split(',')[1] || '';
-  wsClient.send({
-    type: 'STREAM_SCREENSHOT',
-    screenshot: { filename, base64, annotationId },
+function recordPageMeta(msg) {
+  chrome.storage.local.get(['sessionMeta'], (data) => {
+    const meta = data.sessionMeta || {};
+    // First url wins: keep the primary/active-tab url. With multi-tab capture
+    // PAGE_META arrives from every tab — without this guard a background tab would
+    // clobber the session url. userAgent/viewport carry no per-tab meaning worth
+    // pinning, so let the latest reporter fill them.
+    if (!meta.url && msg.url) meta.url = msg.url;
+    meta.userAgent = msg.userAgent || meta.userAgent || '';
+    meta.viewport = msg.viewport || meta.viewport || '';
+    chrome.storage.local.set({ sessionMeta: meta });
   });
 }
 
@@ -383,13 +312,16 @@ function storeNewEntry(entryData) {
   if (entryData.dedupKey) {
     chrome.storage.session.set({ [`dedup_${entryData.dedupKey}`]: key });
   }
-  // Buffer for stream flush
-  streamBuffer.push(entry);
   entryCounter++;
   chrome.storage.session.set({ entryCounter });
 }
 
-function startRecording(config, callback) {
+async function startRecording(config, callback) {
+  // Record and a feedback session both own START_CAPTURE on their tabs: one at a time
+  if (await feedbackStore.hasActiveSession()) {
+    if (callback) callback({ recording: false, error: 'feedback-active' });
+    return;
+  }
   chrome.storage.local.get(null, (all) => {
     const logKeys = Object.keys(all).filter((k) => k.startsWith('log_'));
     const ssKeys = Object.keys(all).filter((k) => k.startsWith('screenshot_'));
@@ -429,14 +361,12 @@ function startRecording(config, callback) {
 
       chrome.action.setBadgeText({ text: 'REC' });
       chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
-      startStreaming();
       if (callback) callback({ recording: true, entryCount: 0 });
     });
   });
 }
 
 function stopRecording(callback) {
-  stopStreaming();
   chrome.storage.session.set({ recording: false, recordingWindowId: null });
   chrome.storage.local.get(['sessionMeta'], (data) => {
     const meta = data.sessionMeta || {};
@@ -444,31 +374,32 @@ function stopRecording(callback) {
     chrome.storage.local.set({ sessionMeta: meta }, () => {
       // Broadcast STOP_CAPTURE to every tab (all windows) so any tab that ever resumed
       // capture is guaranteed to stop, regardless of which window it is in now.
-      chrome.tabs.query({}, (tabs) => {
+      // Tabs of a live feedback session keep capturing: that capture is not Record's.
+      chrome.tabs.query({}, async (tabs) => {
         for (const tab of tabs) {
-          if (tab.id != null) chrome.tabs.sendMessage(tab.id, { type: 'STOP_CAPTURE' }).catch(() => {});
+          if (tab.id == null || await isFeedbackTab(tab.url)) continue;
+          chrome.tabs.sendMessage(tab.id, { type: 'STOP_CAPTURE' }).catch(() => {});
         }
       });
       chrome.action.setBadgeText({ text: '' });
-      if (callback) callback({ recording: false, entryCount: entryCounter });
+      if (callback) {
+        callback({ recording: false, entryCount: entryCounter, annotationCount: annotationCounter, screenshotCount: screenshotCounter });
+      }
     });
   });
 }
 
 async function handleScreenshot(msg, tabId) {
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+    // Element crops use the picker's frozen shot when one exists: the page may
+    // have changed since the click, the frozen image matches the click-time rect.
+    const frozenShot = msg.mode === 'element' ? await getFrozenShot(tabId) : null;
+    const dataUrl = frozenShot?.dataUrl || await chrome.tabs.captureVisibleTab(null, { format: 'png' });
     const screenshotId = `screenshot_${Date.now()}`;
 
     if (msg.mode === 'full') {
       // Store directly, no crop needed
-      chrome.storage.local.set({
-        [screenshotId]: { dataUrl, annotationId: msg.annotationId || null, mode: 'full' },
-      });
-      screenshotCounter++;
-      chrome.storage.session.set({ screenshotCounter });
-      // Stream to MCP server
-      streamScreenshot(dataUrl, msg.annotationId || null, 'full');
+      storeScreenshot(screenshotId, { dataUrl, annotationId: msg.annotationId || null, mode: 'full' }, tabId);
       return;
     }
 
@@ -489,17 +420,27 @@ async function handleScreenshot(msg, tabId) {
       screenshotId,
       annotationId: msg.annotationId || null,
       mode: msg.mode,
+      tabId,
     });
   } catch (err) {
     console.error('__fe_debug_logger__', 'Screenshot capture failed:', err);
   }
 }
 
+// Region and full-page shots have no note of their own (element shots belong to an
+// annotation), so once stored the page is asked to prompt for one. The prompt only
+// appears after the capture, so it never ends up in the image.
+function storeScreenshot(screenshotId, record, tabId) {
+  chrome.storage.local.set({ [screenshotId]: { ...record, timestamp: new Date().toISOString() } }, () => {
+    if (tabId == null || record.mode === 'element') return;
+    chrome.tabs.sendMessage(tabId, { type: 'SCREENSHOT_TAKEN', screenshotId, mode: record.mode }).catch(() => {});
+  });
+  screenshotCounter++;
+  chrome.storage.session.set({ screenshotCounter });
+}
+
 async function copyLog() {
-  const all = await chrome.storage.local.get(null);
-  const logKeys = Object.keys(all).filter((k) => k.startsWith('log_')).sort();
-  const entries = logKeys.map((k) => all[k]);
-  const sessionMeta = all.sessionMeta || {};
+  const { sessionMeta, entries, screenshots } = await gatherLogData();
 
   const hasDoc = await chrome.offscreen.hasDocument();
   if (!hasDoc) {
@@ -512,7 +453,7 @@ async function copyLog() {
 
   chrome.runtime.sendMessage({
     type: 'PROCESS_COPY',
-    data: { sessionMeta, entries, screenshotMap: {} },
+    data: { sessionMeta, entries, screenshotMap: {}, screenshots: screenshots.map((s) => ({ ...s, filename: null })) },
   });
 }
 
@@ -537,7 +478,10 @@ async function exportLog() {
 
   chrome.runtime.sendMessage({
     type: 'PROCESS_EXPORT',
-    data: { sessionMeta: logData.sessionMeta, entries: logData.entries, screenshotMap: logData.screenshotMap, screenshotFiles },
+    data: {
+      sessionMeta: logData.sessionMeta, entries: logData.entries, screenshotMap: logData.screenshotMap,
+      screenshots: logData.screenshots, screenshotFiles,
+    },
     zipFilename,
   });
 

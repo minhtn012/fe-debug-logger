@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review feedback</title>
+  <link rel="stylesheet" href="review.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <h2>Session</h2>
+    <div id="sessionList" class="session-list"></div>
+  </aside>
+  <main>
+    <div id="status" class="status" role="status"></div>
+
+    <section id="empty" class="notice" hidden>
+      <h1>Chưa có session feedback nào</h1>
+      <p>Mở trang cần góp ý, bật Feedback cho site đó (bấm icon extension, hoặc nút Feedback trong popup), rồi bấm nút <strong>Góp ý</strong> ở góc dưới bên phải trang để bắt đầu một session.</p>
+    </section>
+
+    <section id="gone" class="notice" hidden>
+      <h1>Session đã bị xoá</h1>
+      <p>Chọn một session khác ở cột bên trái.</p>
+    </section>
+
+    <section id="view" hidden>
+      <div id="header" class="header"></div>
+      <div class="actions">
+        <button id="copyBtn" class="btn btn-copy" type="button">Copy MD</button>
+        <button id="exportMdBtn" class="btn btn-export" type="button">Export MD</button>
+        <button id="exportZipBtn" class="btn btn-export" type="button">Export ZIP</button>
+        <span class="spacer"></span>
+        <span id="deleteSlot"></span>
+      </div>
+      <div id="items" class="items"></div>
+      <p id="noItems" class="muted" hidden>Session chưa có item nào.</p>
+      <div class="tabs">
+        <button id="tabConsole" class="tab active" data-tab="console" type="button">Console errors (0)</button>
+        <button id="tabNetwork" class="tab" data-tab="network" type="button">Network issues (0)</button>
+      </div>
+      <div id="logs" class="logs"></div>
+    </section>
+  </main>
+
+  <dialog id="zoom" class="zoom"><img id="zoomImg" alt="Ảnh cỡ thật"></dialog>
+
+  <script src="lib/jszip.min.js"></script>
+  <script src="feedback/feedback-store.js"></script>
+  <script src="formatter/markdown-formatter.js"></script>
+  <script src="formatter/feedback-formatter.js"></script>
+  <script src="review-export.js"></script>
+  <script src="review-render.js"></script>
+  <script src="review.js"></script>
+</body>
+</html>

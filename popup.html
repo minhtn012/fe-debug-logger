@@ -15,7 +15,7 @@
       <button id="clearBtn" class="btn btn-clear" disabled>Clear</button>
     </div>
     <div class="tools">
-      <button id="annotateBtn" class="btn btn-annotate">Annotate</button>
+      <button id="annotateBtn" class="btn btn-annotate">Annotate <kbd id="annotateKey" class="kbd" hidden></kbd></button>
       <div class="screenshot-group">
         <button id="screenshotBtn" class="btn btn-screenshot">Screenshot &#x25BE;</button>
         <div id="screenshotMenu" class="dropdown-menu hidden">
@@ -23,6 +23,11 @@
           <button id="ssRegion" class="dropdown-item">Select Region</button>
         </div>
       </div>
+    </div>
+    <div class="feedback">
+      <button id="feedbackBtn" class="btn btn-feedback" disabled>Feedback</button>
+      <button id="feedbackReviewBtn" class="btn btn-feedback-review">Xem feedback</button>
+      <div id="feedbackStatus" class="feedback-status"></div>
     </div>
     <div class="options">
       <label><input type="checkbox" id="optConsole" checked> Console Errors</label>
@@ -32,6 +37,15 @@
     </div>
     <div id="entryCount" class="entry-count"></div>
     <div id="annotationCount" class="entry-count"></div>
+    <div class="shortcuts">
+      <div class="shortcuts-head">
+        <span>Phím tắt</span>
+        <button id="shortcutsEditBtn" class="link-btn">Đổi phím</button>
+      </div>
+      <div class="shortcut-row"><span>Annotate element</span><kbd class="kbd" data-cmd="toggle-annotate"></kbd></div>
+      <div class="shortcut-row"><span>Thoát chế độ chọn</span><kbd class="kbd">Esc</kbd></div>
+      <p class="shortcuts-tip">Element nằm trong menu hay dropdown đang mở: dùng phím tắt. Bấm icon extension sẽ làm menu đóng.</p>
+    </div>
   </div>
   <script src="popup.js"></script>
 </body>
