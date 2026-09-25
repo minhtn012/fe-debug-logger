@@ -4,7 +4,7 @@ Chrome extension that captures frontend debug logs as structured Markdown — op
 
 | Recording & Annotation | Popup UI | Exported Output |
 |---|---|---|
-| ![Recording](imgs-store/resized/04-annotation.png) | ![Popup](imgs-store/resized/01-popup.png) | ![Export](imgs-store/resized/05-mcp-integration.png) |
+| ![Recording](imgs-store/resized/04-annotation.png) | ![Popup](imgs-store/resized/01-popup.png) | ![Export](imgs-store/resized/03-debug-output.png) |
 
 ## Features
 
@@ -13,7 +13,7 @@ Chrome extension that captures frontend debug logs as structured Markdown — op
 - **Network Monitoring** — logs HTTP errors (status >= 400) and slow requests (> 3s)
 - **Component State Snapshots** — auto-detects React & Vue, captures props/state trees
 - **DOM Annotation** — click elements to annotate with notes (`Option+Shift+A` on Mac / `Alt+Shift+A`)
-- **Screenshot Capture** — full page or select region
+- **Screenshot Capture** — visible page or a selected region, each with an optional note
 - **Selective Capture** — toggle categories independently
 - **Sensitive Data Masking** — auto-masks password/token/apiKey fields
 - **Structured Markdown Export** — session metadata, formatted tables, code blocks
@@ -21,18 +21,23 @@ Chrome extension that captures frontend debug logs as structured Markdown — op
 
 ## Install
 
-**From Chrome Web Store** (coming soon)
+Needs Chrome 111 or newer.
 
-**Manual Install (Developer Mode):**
+**From Chrome Web Store** — the store version can lag behind this repo while a new release is in review.
 
-1. Clone this repository:
+**From GitHub (latest version, Developer Mode):**
+
+1. Get the code, either way:
    ```bash
    git clone https://github.com/minhtn012/fe-debug-logger.git
    ```
+   or on GitHub click **Code → Download ZIP** and unzip it
 2. Open `chrome://extensions/` in Chrome
 3. Enable **Developer mode** (top right)
-4. Click **Load unpacked** and select the cloned folder
+4. Click **Load unpacked** and select the folder (the one with `manifest.json`)
 5. Pin the extension from the toolbar
+
+**Update a GitHub install:** run `git pull` in the folder (or download the ZIP again into the same folder), then click the reload icon ↻ on the extension's card in `chrome://extensions/`. Captured data and feedback sessions stay. Do not also install the store version in the same Chrome profile.
 
 **Builds:** `bash build.sh` packs two store uploads from the same source:
 
@@ -63,7 +68,7 @@ Use the extension popup to capture debug data.
 6. Click **Stop** when done
 7. Choose an output method:
    - **Copy** — copies Markdown to clipboard (paste directly into Claude Code)
-   - **Export** — downloads as `.md` file or `.zip` (if screenshots included)
+   - **Export** — downloads `fe-debug-<site>-<time>.zip` with `debug-log.md` and a `screenshots/` folder
 8. **Clear** — resets all captured data for a new session
 
 ### Annotation Mode
@@ -97,10 +102,11 @@ Capture visual evidence alongside your debug logs:
 After exporting, pass the debug log to Claude Code:
 
 ```bash
-# Option 1: Reference the exported file
-claude "Analyze this debug log and fix the bug: $(cat fe-debug-log-20260314-153022.md)"
+# Option 1: unzip the export and point Claude Code at it (screenshots included)
+unzip fe-debug-localhost-2026-09-25T12-00-00.zip -d fe-debug
+claude "Read fe-debug/debug-log.md and its screenshots, then fix the bug"
 
-# Option 2: Copy from extension, then paste directly into Claude Code
+# Option 2: click Copy in the popup, then paste into Claude Code (text only, no images)
 ```
 
 The exported Markdown gives Claude Code full context: what the user did, what errors occurred, what network requests failed, and what the component state looked like — no manual copy-pasting from DevTools needed.
@@ -137,16 +143,19 @@ The exported Markdown includes:
 | Section | Content |
 |---------|---------|
 | Session Info | URL, timestamp, duration, browser, viewport |
-| Console Errors | Error messages with stack traces |
+| Report Metadata | Extension version, counts of annotations, screenshots, errors, network issues |
+| Annotations | Note, severity, tags, selector, nearby events (±5s), element screenshot, DOM snapshot |
+| Screenshots | Region and visible-page shots with their notes |
 | User Actions | Click/input/navigation log with selectors |
+| Console Errors | Error messages with stack traces |
 | Network Issues | Failed requests, slow responses |
 | Component State | React/Vue component tree snapshots |
-| Annotations | Element annotations with notes |
-| Screenshots | Captured images (base64) |
+
+Images are PNG files in the ZIP's `screenshots/` folder, linked from `debug-log.md`.
 
 ## Architecture
 
-- **Manifest V3** — Chrome 88+
+- **Manifest V3** — Chrome 111+ (MAIN-world content scripts, offscreen documents)
 - **Vanilla JavaScript** — zero external dependencies (except bundled jszip)
 - **Dual Content Script Pattern**:
   - ISOLATED world: Chrome API access, message bridge

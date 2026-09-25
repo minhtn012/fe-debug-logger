@@ -11,7 +11,7 @@ FE Debug Logger captures the following data **only when recording is actively st
 - Network requests (HTTP errors and slow responses)
 - Component state snapshots (React and Vue frameworks)
 - DOM annotations (user-created notes on page elements)
-- Screenshots (full page or selected region)
+- Screenshots (visible page or selected region) and the notes you add to them
 
 ## Data Storage
 
