@@ -34,8 +34,8 @@ Then read: [Code Standards](./code-standards.md)
 
 ### For Project Planning
 **Start here**: [Project Roadmap](./project-roadmap.md)
-- Current status (v0.1.0, released 2026-03-13)
-- 6-phase roadmap (v0.2.0 → v1.0.0)
+- Current status (v0.3.0, released 2026-09-25) and release history
+- 6-phase roadmap with what is done, pending and dropped
 - Known limitations and future enhancements
 - Risk assessment and success metrics
 
@@ -172,25 +172,17 @@ See [code-standards.md](./code-standards.md) for complete guidelines.
 
 ## Roadmap Status
 
-### Current: v0.1.0 (Released 2026-03-13)
+### Current: v0.3.0 (Released 2026-09-25)
 
-**Status**: MVP Complete
-- [x] Console capture
-- [x] User action tracking
-- [x] Network monitoring
-- [x] Component state snapshots
-- [x] Markdown export
-- [x] Popup UI controls
-- [x] Sensitive field masking
+- [x] Record: console, user actions, network, React/Vue state, masking (0.1.0)
+- [x] Annotation with hotkey, screenshots, ZIP export (0.2.0)
+- [x] Console dedup, full network details with curl (0.2.1)
+- [x] Recording survives reloads and spans the recording window (0.3.0)
+- [x] Feedback mode and the FE Feedback build (0.3.0)
+- [x] Notes on region and full-page screenshots (0.3.0)
+- [x] MCP server removed; export/copy is the only output (0.3.0)
 
-### Next: v0.2.0 (Q2 2026)
-
-**Focus**: Stability & polish
-- Vue 2/3 edge case fixes
-- Performance optimization
-- Error logging improvements
-
-### Future: v0.3.0 → v1.0.0
+### Next
 
 See [project-roadmap.md](./project-roadmap.md) for:
 - Phase details and effort estimates
@@ -371,7 +363,7 @@ See [system-architecture.md](./system-architecture.md#performance-considerations
 - Network response bodies limited to prevent logging secrets
 
 ### Privacy
-- No automatic upload or remote logging in v0.1.0
+- No automatic upload or remote logging
 - All data stored locally until user exports
 - User controls which categories to capture
 

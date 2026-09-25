@@ -2,95 +2,95 @@
 
 ## Current Status
 
-**Version**: 0.1.0 (MVP - Minimum Viable Product)
-**Release Date**: 2026-03-13
-**Status**: Initial Release
+**Version**: 0.3.0 (tag `v0.3.0`, 2026-09-25)
+**Distribution**: [Chrome Web Store](https://chromewebstore.google.com/detail/fe-debug-logger/gjmlfcmchkdnoocoalcomchocbncdlii) (0.3.0 submitted for review; the store serves the previous version until approved) and Load unpacked from GitHub
+**Builds**: FE Debug Logger (full) and FE Feedback (feedback only), both packed by `build.sh`
 
-### v0.1.0 Features
+## Release History
 
-- [x] Console capture (errors, warnings, stack traces)
-- [x] User action tracking (clicks, form inputs, navigation)
-- [x] Network monitoring (HTTP errors, slow requests)
-- [x] React/Vue component state snapshots
-- [x] Markdown export with structured formatting
-- [x] Popup UI with Start/Stop/Export/Clear controls
-- [x] Selective capture categories (4 toggles)
-- [x] Sensitive field masking (passwords, tokens)
-- [x] Session metadata (URL, time, browser, viewport)
+| Version | Date | Highlights |
+|---------|------|------------|
+| 0.1.0 | 2026-03-13 | Console, user action, network, React/Vue state capture; Markdown export; popup with 4 capture toggles; sensitive field masking |
+| 0.2.0 | 2026-03-14 | DOM annotation (hotkey), full-page and region screenshots, ZIP export, MCP server for Claude Code |
+| 0.2.1 | 2026-03-25 | Console dedup, full network details with headers and curl, more reliable MCP server with live log streaming |
+| 0.3.0 | 2026-09-25 | Recording survives reloads and spans every tab of the recording window; Feedback mode (per-site floating button, element picker on a frozen page, review page, MD/ZIP export, FE Feedback build); notes on region and full-page screenshots; MCP server and WebSocket client removed; Markdown export encoding fix; real version in Report Metadata |
 
 ### Known Limitations
 
-- **Vue 3 Detection**: Improved in v0.1.0 but may miss some edge cases
 - **Framework Support**: Only React and Vue; others not auto-detected
 - **Response Capture**: Limited to first 1 KB to prevent memory bloat
-- **Storage**: Limited to ~10 MB per session (Chrome quota)
+- **Screenshots**: 5 per Record session; "Full Page" captures the visible viewport, not the whole scrolled page
+- **Page freeze (Feedback)**: native `<select>`, cross-origin iframes and Shadow DOM `:hover` rules are not covered (see README)
 - **Export Only**: No remote logging or webhook support
-- **Manual Cleanup**: Users must manually clear entries between sessions
+- **No automated tests** for capture modules; the guide video script (`scripts/docs-video/`) exercises the main flows end to end
 
-## Phase 1: Stability & Polish (v0.2.0, Q2 2026)
+## Phase 1: Stability & Polish
 
-**Focus**: Bug fixes, edge case handling, performance optimization
+**Focus**: Bug fixes, edge case handling, performance optimization. Not scheduled.
 
 ### Tasks
 
-| Priority | Task | Owner | Status | ETA |
-|----------|------|-------|--------|-----|
-| High | Fix Vue 2/3 detection edge cases | TBD | Pending | 2026-04-15 |
-| High | Add comprehensive error logging | TBD | Pending | 2026-04-10 |
-| High | Performance profiling on slow networks | TBD | Pending | 2026-04-20 |
-| Medium | Reduce popup latency on large sessions | TBD | Pending | 2026-04-25 |
-| Medium | Improve CSS selector generation for nested elements | TBD | Pending | 2026-05-01 |
-| Low | Add unit tests for capture modules | TBD | Pending | 2026-05-10 |
+| Priority | Task | Status |
+|----------|------|--------|
+| High | Fix Vue 2/3 detection edge cases | Pending |
+| High | Add comprehensive error logging | Pending |
+| High | Performance profiling on slow networks | Pending |
+| Medium | Reduce popup latency on large sessions | Pending |
+| Medium | Improve CSS selector generation for nested elements | Pending |
+| Low | Add unit tests for capture modules | Pending |
+| Medium | Network Issues lists `200 OK` entries with an empty URL | Pending |
+| Low | Floating Feedback button can cover the Save button of the form near the bottom-right corner | Pending |
+| Low | Annotation computed styles include the picker's own `cursor: crosshair` and `__fe_freeze_hover` class | Pending |
 
 ### Success Criteria
 
-- [x] Zero unresolved bugs in v0.1.0
-- [ ] Handles 10K+ entries without performance degradation
+- [x] Entry cap (2,000 per session) keeps storage under quota
+- [x] Recording survives reloads and new tabs in the recording window (0.3.0)
 - [ ] Component state capture works for 95%+ of React/Vue apps
 - [ ] Export completes in <2 seconds for typical sessions
 - [ ] No memory leaks after 1+ hour of recording
 
-## Phase 2: Enhanced Capture (v0.3.0, Q3 2026)
+## Phase 2: Enhanced Capture
 
 **Focus**: Additional data sources and capture modes
 
 ### Features
 
-#### 2.1 Local Storage & Session Storage Capture
+#### 2.1 Local Storage & Session Storage Capture — Pending
 - Auto-snapshot localStorage/sessionStorage on errors
 - Include in export for context
 
 **Effort**: 2 days | **Risk**: Low
 
-#### 2.2 API Response Capture
-- Increase response body capture to 5 KB (configurable)
-- Parse JSON responses with truncation
-- Include response headers in export
+#### 2.2 API Response Capture — Partly done (0.2.1)
+- Done: full request details with headers and a curl command (0.2.1)
+- Pending: configurable response body size, JSON parsing with truncation
 
 **Effort**: 3 days | **Risk**: Low
 
-#### 2.3 Screenshot Capture (optional)
-- Capture page screenshot on error or on-demand
-- Export as embedded data URL in Markdown
-- Configurable: enable/disable
+#### 2.3 Screenshot Capture — Done (0.2.0, notes in 0.3.0)
+- On-demand full-page and region screenshots, element screenshots on annotations
+- Exported as PNG files in the ZIP, linked from `debug-log.md` with their notes
 
-**Effort**: 5 days | **Risk**: Medium
-
-#### 2.4 Custom Field Masking Rules
+#### 2.4 Custom Field Masking Rules — Pending
 - Settings UI for user-defined sensitive patterns
 - Store in chrome.storage.local
 - Apply to all capture modules
 
 **Effort**: 4 days | **Risk**: Low
 
+#### 2.5 Feedback Mode — Done (0.3.0)
+- Per-site floating button, element picker on a frozen page, bug/suggestion items with screenshots
+- Review page with edit, delete and MD/ZIP export; separate FE Feedback build
+
 ### Success Criteria
 
 - [ ] Local storage snapshots included in exports
 - [ ] Response capture covers 95%+ of common APIs
-- [ ] Screenshot feature integrated and tested
+- [x] Screenshot feature integrated and tested
 - [ ] Custom masking rules working end-to-end
 
-## Phase 3: Framework Expansion (v0.4.0, Q4 2026)
+## Phase 3: Framework Expansion
 
 **Focus**: Support for additional frameworks
 
@@ -129,9 +129,9 @@
 - [ ] Angular component detection working reliably
 - [ ] Svelte state capture functional
 - [ ] Plugin system documented and tested
-- [ ] 5+ frameworks supported by v0.4.0 release
+- [ ] 5+ frameworks supported
 
-## Phase 4: Advanced Export (v0.5.0, Q1 2027)
+## Phase 4: Advanced Export
 
 **Focus**: Enhanced export formats and distribution
 
@@ -173,7 +173,7 @@
 - [ ] Cloud integrations optional but available
 - [ ] Template system flexible and documented
 
-## Phase 5: Intelligence & Analysis (v0.6.0, 2027)
+## Phase 5: Intelligence & Analysis
 
 **Focus**: AI-assisted debugging and automatic insights
 
@@ -200,12 +200,9 @@
 
 **Effort**: 8 days | **Risk**: High
 
-#### 5.4 Claude Code Integration (If Approved)
-- Direct export to Claude Code via API
-- Automatic debugging session initiation
-- Structured context passing
-
-**Effort**: 10 days | **Risk**: High (API dependency)
+#### 5.4 Claude Code Integration — Dropped
+- 0.2.x shipped an MCP server that let Claude Code read the log over a local WebSocket
+- Removed in 0.3.0: exporting (or copying) the Markdown and handing it to Claude Code is faster and needs no local server; see the decision log
 
 ### Success Criteria
 
@@ -214,7 +211,7 @@
 - [ ] AI insights helpful and non-intrusive
 - [ ] Users report faster debugging with insights
 
-## Phase 6: Enterprise Features (v1.0.0, 2027)
+## Phase 6: Enterprise Features
 
 **Focus**: Team collaboration and compliance
 
@@ -346,12 +343,25 @@
    - Rationale: Simplify MVP, add in v0.5.0
    - Alternative considered: Basic webhook (rejected — adds complexity)
 
+### Decisions Made in v0.2.x – v0.3.0
+
+4. **Screenshots as PNG files in a ZIP** (0.2.0)
+   - Rationale: keeps `debug-log.md` small and readable; Claude Code opens the images by path
+   - Alternative considered: data URLs inside the Markdown (rejected — bloats the file)
+
+5. **Remove the MCP server** (2026-09-24, released in 0.3.0)
+   - Rationale: export/copy and hand the Markdown to Claude Code is faster and needs no local server or WebSocket
+   - Alternative considered: keep MCP next to export (rejected — two paths to maintain for one job)
+
+6. **Feedback mode as a separate build too** (0.3.0)
+   - Rationale: testers who only give UI feedback get no popup, no hotkeys, one icon to toggle the site
+   - Constraint: install only one of the two builds per Chrome profile
+
 ### Pending Decisions
 
 - [ ] Framework plugin system: Built-in vs. external packages?
 - [ ] Cloud storage: Which providers to prioritize (Google Drive, Dropbox, Azure)?
 - [ ] Team collaboration: Self-hosted vs. SaaS backend?
-- [ ] Claude integration: API approach, authentication, permissions?
 
 ## Appendix: Dependencies & Constraints
 
@@ -383,5 +393,4 @@
 
 ---
 
-**Last Updated**: 2026-03-13
-**Next Review**: 2026-04-10
+**Last Updated**: 2026-09-25
