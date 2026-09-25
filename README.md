@@ -23,7 +23,7 @@ Chrome extension that captures frontend debug logs as structured Markdown — op
 
 Needs Chrome 111 or newer.
 
-**From Chrome Web Store** — the store version can lag behind this repo while a new release is in review.
+**From Chrome Web Store:** [FE Debug Logger](https://chromewebstore.google.com/detail/fe-debug-logger/gjmlfcmchkdnoocoalcomchocbncdlii) — updates itself, but can lag behind this repo while a new release is in review.
 
 **From GitHub (latest version, Developer Mode):**
 
